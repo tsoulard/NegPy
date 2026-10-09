@@ -80,6 +80,7 @@ from negpy.features.process.logic import (
 from negpy.features.stitch.models import stitch_hash, stitch_name
 from negpy.desktop.workers.capture_worker import (
     CalibrationRequest,
+    SensorResponseRequest,
     CaptureRequest,
     CaptureWorker,
     LiveViewRequest,
@@ -542,6 +543,12 @@ class AppController(QObject):
     capture_calibration_progress = pyqtSignal(float, str)
     capture_calibration_finished = pyqtSignal(object)
     capture_calibration_exposure = pyqtSignal(str)  # "over"/"under": target unreachable, aborted, no preset
+    sensor_response_requested = pyqtSignal(SensorResponseRequest)
+    capture_sensor_response_progress = pyqtSignal(float, str)
+    capture_sensor_response_measured = pyqtSignal(object)  # 3x3 array: sensor channel rows, LED columns
+    capture_sensor_response_failed = pyqtSignal(str)
+    presence_poll_requested = pyqtSignal(str)  # light port
+    capture_presence_polled = pyqtSignal(bool, bool)  # camera, Scanlight
     poll_connection_requested = pyqtSignal(str)  # light port (auto-poll)
     connection_polled = pyqtSignal(dict)  # {usb_ok, usb_model, light_ok, light_detail}
     poll_light_temp_requested = pyqtSignal(str)  # light port (temp-only poll, runs even mid-live-view)
@@ -1015,6 +1022,12 @@ class AppController(QObject):
         self.capture_worker.calibration_progress.connect(self.capture_calibration_progress.emit)
         self.capture_worker.calibration_finished.connect(self.capture_calibration_finished.emit)
         self.capture_worker.calibration_exposure.connect(self.capture_calibration_exposure.emit)
+        self.sensor_response_requested.connect(self.capture_worker.measure_sensor_response)
+        self.capture_worker.sensor_response_progress.connect(self.capture_sensor_response_progress.emit)
+        self.capture_worker.sensor_response_measured.connect(self.capture_sensor_response_measured.emit)
+        self.capture_worker.sensor_response_failed.connect(self.capture_sensor_response_failed.emit)
+        self.presence_poll_requested.connect(self.capture_worker.poll_presence)
+        self.capture_worker.presence_polled.connect(self.capture_presence_polled.emit)
         self.poll_connection_requested.connect(self.capture_worker.poll_connection)
         self.capture_worker.poll_status.connect(self.connection_polled.emit)
         self.poll_light_temp_requested.connect(self.capture_worker.poll_light_temp)
@@ -6102,6 +6115,14 @@ class AppController(QObject):
         self._ensure_capture_thread()
         self.capture_worker.arm()
         self.calibration_requested.emit(req)
+
+    def start_sensor_response(self, req: SensorResponseRequest) -> None:
+        self._ensure_capture_thread()
+        self.sensor_response_requested.emit(req)
+
+    def poll_capture_presence(self, port: str) -> None:
+        self._ensure_capture_thread()
+        self.presence_poll_requested.emit(port)
 
     def poll_connection(self, port: str) -> None:
         self._ensure_capture_thread()

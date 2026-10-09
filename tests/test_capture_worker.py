@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from negpy.desktop.workers.capture_worker import CalibrationRequest, CaptureRequest, CaptureWorker
+from negpy.desktop.workers.capture_worker import CalibrationRequest, CaptureRequest, CaptureWorker, SensorResponseRequest
 from negpy.services.capture.calibration import Roi
 
 
@@ -406,3 +406,93 @@ def test_successful_open_clears_the_claimed_state(monkeypatch):
     worker._camera = OpensFine()
     worker._acquire_camera()
     assert worker._claimed_elsewhere is False
+
+
+def _sensor_run(worker, req=None):
+    measured, failed = [], []
+    worker.sensor_response_measured.connect(measured.append)
+    worker.sensor_response_failed.connect(failed.append)
+    worker.measure_sensor_response(req or SensorResponseRequest(settle_s=0))
+    return measured, failed
+
+
+def test_sensor_response_measures_on_the_simulated_rig_and_releases_the_camera(monkeypatch):
+    monkeypatch.setenv("NEGPY_SIMULATE_HARDWARE", "1")
+    worker = CaptureWorker()
+    try:
+        measured, failed = _sensor_run(worker)
+        assert not failed and measured[0].shape == (3, 3)
+        assert all(measured[0][i, i] == measured[0][:, i].max() for i in range(3))
+        assert not worker._holds_camera()
+    finally:
+        worker.shutdown()
+
+
+def test_sensor_response_keeps_a_session_it_did_not_open_and_restores_the_light(monkeypatch):
+    monkeypatch.setenv("NEGPY_SIMULATE_HARDWARE", "1")
+    from negpy.infrastructure.simulated.scanlight import current_color
+
+    worker = CaptureWorker()
+    try:
+        worker._acquire_camera()
+        worker.set_light(10, 20, 30, 0, "")
+        measured, _failed = _sensor_run(worker)
+        assert measured and worker._holds_camera()
+        assert tuple(current_color()[:3]) == (10, 20, 30)
+    finally:
+        worker.shutdown()
+
+
+def test_an_abandoned_sensor_response_never_touches_the_hardware(monkeypatch):
+    worker = CaptureWorker()
+    monkeypatch.setattr(worker, "_ensure_light", lambda _port: pytest.fail("light used"))
+    req = SensorResponseRequest()
+    req.cancel.set()
+    assert _sensor_run(worker, req) == ([], [])
+
+
+@pytest.mark.parametrize("broken, drops", [("_ensure_light", False), ("read_settings", True)])
+def test_a_failed_sensor_response_drops_a_held_session_only_for_a_camera_fault(monkeypatch, broken, drops):
+    monkeypatch.setenv("NEGPY_SIMULATE_HARDWARE", "1")
+    worker = CaptureWorker()
+    dropped = []
+    worker.live_view_failed.connect(dropped.append)
+
+    def _fail(*_args):
+        raise RuntimeError("it broke")
+
+    try:
+        camera = worker._acquire_camera()
+        monkeypatch.setattr(camera if broken == "read_settings" else worker, broken, _fail)
+        measured, failed = _sensor_run(worker)
+        assert not measured and failed == ["it broke"]
+        assert bool(dropped) == drops and worker._holds_camera() != drops
+    finally:
+        worker.shutdown()
+
+
+def test_presence_poll_reports_the_simulated_rig_without_opening_the_camera(monkeypatch):
+    monkeypatch.setenv("NEGPY_SIMULATE_HARDWARE", "1")
+    worker = CaptureWorker()
+    seen = []
+    worker.presence_polled.connect(lambda camera, light: seen.append((camera, light)))
+    try:
+        worker.poll_presence("")
+        assert seen == [(True, True)] and not worker._holds_camera()
+        worker._claimed_elsewhere = True
+        worker.poll_presence("")
+        assert seen[-1] == (False, True)
+    finally:
+        worker.shutdown()
+
+
+def test_presence_poll_reports_a_missing_scanlight(monkeypatch):
+    import negpy.desktop.workers.capture_worker as capture_worker_module
+
+    worker = CaptureWorker()
+    seen = []
+    worker.presence_polled.connect(lambda camera, light: seen.append((camera, light)))
+    monkeypatch.setattr(capture_worker_module, "list_cameras", lambda: [])
+    monkeypatch.setattr(worker, "_ensure_light", lambda _port: (_ for _ in ()).throw(RuntimeError("No serial ports found.")))
+    worker.poll_presence("")
+    assert seen == [(False, False)]

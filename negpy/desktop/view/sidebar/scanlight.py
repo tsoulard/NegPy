@@ -48,7 +48,11 @@ from negpy.infrastructure import simulated
 from negpy.infrastructure.capture.gphoto import default_settings_path
 from negpy.infrastructure.capture.settings import ScanlightSettings, WhiteCaptureMode
 from negpy.services.capture.focus_meter import FocusMeter
-from negpy.services.capture.calibration import REFERENCE_LEVELS, SHUTTER_CANDIDATES, normalize_start_point, shutter_seconds, usable_ladder
+from negpy.services.capture.calibration import (
+    REFERENCE_LEVELS,
+    normalize_start_point,
+    scan_ladder,
+)
 from negpy.services.assets.sensor import SensorProfiles
 from negpy.services.capture.presets import PresetStore, ScanlightPreset, framing_levels
 
@@ -742,28 +746,15 @@ class ScanlightSidebar(QWidget):
             self._apply_gating()
 
     def _available_shutters(self) -> tuple[str, ...]:
-        """The camera's writable shutter labels (from the live-view settings JSON), fastest-first,
-        clamped to the solver's own ladder span, so calibration solves on *this* body's ladder.
-
-        The bounds are read from SHUTTER_CANDIDATES rather than repeated here: this per-body ladder
-        takes precedence over the built-in fallback, so any limit the solver relies on must hold for
-        it too, or the two silently disagree depending on whether live view had published a ladder.
-        Both ends carry a reason — the ceiling keeps the under-exposure cure reachable (a stopped-down
-        aperture needs the slow end), and the floor keeps the PWM-lit LED out of banding: at the
-        Scanlight's 40 kHz a 1/250 s frame integrates ~160 pulses, but a body's 1/8000 s catches ~5
-        and meters noise instead of light."""
-        data = self._settings_json()
-        floor, ceiling = shutter_seconds(SHUTTER_CANDIDATES[0]), shutter_seconds(SHUTTER_CANDIDATES[-1])
-        info = data.get("shutter") or {}
+        """The camera's writable shutter labels (from the live-view settings JSON) as the ladder
+        calibration solves on, so it solves on this body's own speeds."""
+        info = self._settings_json().get("shutter") or {}
         if not info.get("writable", True):  # absent = unknown, so only an explicit read-only blocks
             # A body that reports the shutter read-only ignores every write, and the only symptom
             # is a read-back that never settles (issue #768). Publishing no ladder makes the caller
             # refuse instead of solving against speeds it cannot set.
             return ()
-        labels = tuple(str(o.get("label", "")).strip() for o in info.get("options", []))
-        # usable_ladder drops the unparseables ("1/0", "Bulb", "") and returns fastest-first. The
-        # range clamp on top is this UI's own policy, not the solver's.
-        return tuple(label for label in usable_ladder(labels) if floor <= shutter_seconds(label) <= ceiling)
+        return scan_ladder(o.get("label", "") for o in info.get("options", []))
 
     def _on_calibrate_new_preset(self, name: str) -> None:
         if self._scanning:

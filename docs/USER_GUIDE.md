@@ -727,9 +727,9 @@ Applying it sets the defaults for new files and rewrites every edited frame in t
 
 *   **Profile**: the sensor matrix. Custom `.toml` matrices go in `<Documents>/NegPy/sensor/`.
 *   **Method**: how the matrix is applied. *Two-Scale* (default) is *Linear* wherever the calibration can be trusted; where a color is mostly leak, as in neon or deep blue, it stops the speckle and keeps the grain at the film's own. *Linear* subtracts the leak exactly and prints those colors as speckled, fully saturated color. *Density* applies the matrix to densities: no speckle, but strong colors come out slightly less vivid. Two-Scale and Density read the film base color from the frame; a scan clipped there uses Linear.
-*   **Calibrate** (vials icon on the header): build a profile from three bare-light R/G/B exposures. A Single Capture Scanlight preset can save one during its own calibration.
+*   **Calibrate** (vials icon on the header): build a profile from three bare-light R/G/B exposures. Pick them as files, or press **Capture from Camera…** to shoot and measure them with a tethered camera and a Scanlight, with no film in the holder; it asks before the first exposure, and the button is grayed out until both are connected. A Single Capture Scanlight preset can save one during its own calibration.
 
-Needs **Linear RAW**; grayed out on Transparency and on a Trichrome triplet. **Re-run Roll Analysis** after changing it.
+Needs **Linear RAW**; grayed out on Transparency and on a Trichrome triplet. **Re-run Roll Analysis** after changing it. CAMERA_SCANNING.md has a workflow for each way to build and assign a profile.
 
 **Crosstalk** (hidden in B&W Negative): a channel unmix on the densities before inversion. Dyes, light and sensor all mix the channels, so a matrix describes your whole scanning setup.
 
@@ -1096,7 +1096,7 @@ Shown while a Scanlight is connected.
 *   **Preset**: shows its RGB levels, ISO, shutter and aperture and forces them each frame. **+** calibrates: place the rectangle on clear film base, name it, run it; it solves a shutter and LED levels just under clipping, or says which way to adjust. **Create a manual preset…** sets one by hand, and the save button stores it.
 *   **Red**, **Green**, **Blue**, **White** (0 to 255): LED levels, editable while building a manual preset. **Light Off** turns every channel off.
 *   **Capture mode**: **Triplet** shoots one exposure per LED and merges them; **Single Capture** shoots one exposure with red, green and blue lit together and imports it as an ordinary RAW. Picked in the calibration window, or here while building a manual preset.
-*   **Sensor Profile** (calibration window, Single Capture only, default on): also saves a sensor profile under the preset's name; a roll scanned with the preset takes it and turns Linear RAW on. A preset's profile is not carried to other rolls.
+*   **Create Sensor Profile** (calibration window, Single Capture only, default on): also saves a sensor profile under the preset's name; a roll scanned with the preset takes it and turns Linear RAW on. A preset's profile is not carried to other rolls.
 *   **ISO**, **Shutter**, **Aperture**: the preset's exposure, editable while building a manual preset.
 *   **Channel Delay** (0 to 5000 ms): pauses between R, G and B for bodies that lock up. Triplet presets only.
 

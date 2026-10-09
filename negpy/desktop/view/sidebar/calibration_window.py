@@ -72,7 +72,7 @@ class CalibrationWindow(QDialog):
         self.capture_btn = ChoiceButton(CAPTURE_MODES, CAPTURE_MODE_TOOLTIP)
         name_row.addWidget(self.capture_btn)
         self._sensor_profile_wanted = True  # the operator's pick, kept while Triplet shows the toggle off
-        self.sensor_profile_btn = labeled_toggle("fa5s.vials", " Sensor Profile", True, SENSOR_PROFILE_TOOLTIP)
+        self.sensor_profile_btn = labeled_toggle("fa5s.vials", " Create Sensor Profile", True, SENSOR_PROFILE_TOOLTIP)
         _reserve_checked_width(self.sensor_profile_btn)
         self.sensor_profile_btn.clicked.connect(self._on_sensor_profile_clicked)
         self.capture_btn.currentChanged.connect(lambda _i: self._sync_sensor_profile())
@@ -141,7 +141,7 @@ class CalibrationWindow(QDialog):
         return self.capture_btn.currentIndex() == 1 and self._sensor_profile_wanted
 
     def set_inputs_locked(self, locked: bool) -> None:
-        """Freeze the calibration inputs while a run is in progress: the film-stock name, the capture mode, the Sensor Profile toggle, the base
+        """Freeze the calibration inputs while a run is in progress: the film-stock name, the capture mode, the Create Sensor Profile toggle, the base
         ROI (clicking the image must not move the patch being metered), and the ISO/aperture the
         base is metered at. Re-enabled at any terminal outcome so a failed run can be retried."""
         self._running = locked

@@ -1728,6 +1728,22 @@ def test_scan_request_carries_the_single_capture_presets_sensor_profile(tmp_path
     assert w.controller.start_capture.call_args[0][0].sensor_profile == "TestStock"
 
 
+def test_a_preset_stored_in_an_earlier_session_still_carries_its_sensor_profile(tmp_path):
+    from dataclasses import asdict
+
+    stored = {"Portra 400": asdict(_rgb_preset(single_capture=True, sensor_profile="Portra 400"))}
+    ctrl = MagicMock()
+    ctrl.session.repo.get_global_setting.side_effect = lambda key, default=None: stored if key == "scanlight_presets" else {}
+    w = ScanlightSidebar(ctrl)
+    idx = w.preset_combo.findData("Portra 400")
+    w.preset_combo.setCurrentIndex(idx)
+    w._on_preset_selected(idx)
+    w.output.folder_edit.setText(str(tmp_path))
+    w.output.roll_edit.setText("Roll001")
+    w._start_capture(retake=False)
+    assert w.controller.start_capture.call_args[0][0].sensor_profile == "Portra 400"
+
+
 def test_triplet_scan_request_carries_no_sensor_profile(tmp_path, monkeypatch):
     w = _sidebar()
     _select_stored(w, monkeypatch, _rgb_preset(sensor_profile="TestStock"))

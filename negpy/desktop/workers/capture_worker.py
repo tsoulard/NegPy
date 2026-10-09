@@ -7,7 +7,7 @@ and one libgphoto2 session, held open across captures and shared with live view.
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
@@ -25,7 +25,15 @@ from negpy.infrastructure.capture.protocol import describe_hardware, has_white_c
 from negpy.infrastructure.capture.scanlight import Scanlight
 from negpy.infrastructure.capture.settings import WhiteCaptureMode
 from negpy.kernel.system.logging import get_logger
-from negpy.services.capture.calibration import REFERENCE_LEVELS, REFERENCE_SHUTTER, CalibrationExposureError, CalibrationService, Roi
+from negpy.services.capture.calibration import (
+    REFERENCE_LEVELS,
+    REFERENCE_SHUTTER,
+    CalibrationExposureError,
+    CalibrationService,
+    Roi,
+    normalize_start_point,
+    scan_ladder,
+)
 from negpy.services.capture.service import CaptureService, capture_single
 
 logger = get_logger(__name__)
@@ -74,6 +82,37 @@ class CalibrationRequest:
     single_capture: bool = False  # solve for R, G and B lit together in one exposure
 
 
+# The central half of the frame, the region a sensor profile built from files measures.
+_SENSOR_ROI = Roi(0.25, 0.25, 0.5, 0.5)
+
+
+@dataclass(frozen=True)
+class SensorResponseRequest:
+    """Measure the sensor's response to each Scanlight LED on the bare light. `cancel` stops
+    this run alone, so abandoning it never reaches a scan queued on the same worker."""
+
+    port: str = ""
+    settle_s: float = 0.4
+    cancel: threading.Event = field(default_factory=threading.Event)
+
+
+class _AnySet:
+    """Several cancel events read as one."""
+
+    def __init__(self, *events: threading.Event) -> None:
+        self._events = events
+
+    def is_set(self) -> bool:
+        return any(e.is_set() for e in self._events)
+
+
+def _setting_label(info) -> str:
+    """The current label of one `read_settings` entry, "" when it has none."""
+    if not isinstance(info, dict):
+        return ""
+    return next((str(o.get("label", "")) for o in info.get("options", []) if o.get("raw") == info.get("cur")), "")
+
+
 def _shutters_or_none(shutters: tuple[str, str, str]):
     """UI shutter strings → capture-settings form (None = leave the camera as-is)."""
     if not any(s.strip() for s in shutters):
@@ -105,6 +144,10 @@ class CaptureWorker(QObject):
     calibration_progress = pyqtSignal(float, str)
     calibration_finished = pyqtSignal(object)  # CalibrationResult
     calibration_exposure = pyqtSignal(str)  # "over"/"under" — target unreachable, run aborted, no preset
+    sensor_response_progress = pyqtSignal(float, str)
+    sensor_response_measured = pyqtSignal(object)  # 3x3 array: sensor channel rows, LED columns
+    sensor_response_failed = pyqtSignal(str)
+    presence_polled = pyqtSignal(bool, bool)  # a usable camera is on the bus, the Scanlight answers
     poll_status = pyqtSignal(dict)  # {usb_ok, usb_model, light_ok, light_detail}
     light_temp_polled = pyqtSignal(object)  # Scanlight LED temperature °C, or None (light-only, safe mid-scan)
 
@@ -112,6 +155,7 @@ class CaptureWorker(QObject):
         super().__init__()
         self._light: Optional[Scanlight] = None
         self._light_port = ""
+        self._idle_light = (0, 0, 0, 0)  # the last live-control color, put back after a sensor measurement
         self._cancel = threading.Event()
         # One libgphoto2 session serves live view, settings and stills: the body allows a
         # single PTP claim, and GphotoCamera serialises the three internally. Held open across
@@ -208,6 +252,7 @@ class CaptureWorker(QObject):
         """Live light control — RGB for framing/preview, or white (w) for focus."""
         try:
             self._ensure_light(port).set_color(r=r, g=g, b=b, w=w)
+            self._idle_light = (r, g, b, w)
             self.light_set.emit(r, g, b, w)
         except Exception as e:
             msg = str(e)
@@ -348,6 +393,21 @@ class CaptureWorker(QObject):
         except Exception:
             pass
         self.light_temp_polled.emit(temp)
+
+    @pyqtSlot(str)
+    def poll_presence(self, port: str) -> None:
+        """Whether a camera and the Scanlight are there to capture with. Enumerates the bus and
+        never opens the body, so a caller that owns no camera window leaves no claim behind."""
+        try:
+            camera = bool(list_cameras()) and not self._claimed_elsewhere
+        except Exception:
+            camera = False
+        try:
+            self._ensure_light(port).get_fw_version()
+            light = True
+        except Exception:
+            light = False
+        self.presence_polled.emit(camera, light)
 
     @pyqtSlot(str)
     def poll_connection(self, port: str) -> None:
@@ -551,6 +611,71 @@ class CaptureWorker(QObject):
                 return
             logger.exception("calibration failed")
             self.error.emit(f"Calibration: {e}")
+
+    @pyqtSlot(SensorResponseRequest)
+    def measure_sensor_response(self, req: SensorResponseRequest) -> None:
+        """Shoot each LED alone on the bare light and report the sensor's response. Needs no
+        live view: the frame is uniform, so the patch is fixed and the ladder is read here."""
+        if req.cancel.is_set():
+            return
+        self._cancel.clear()
+        held = self._holds_camera()
+        on_camera = False
+        try:
+            import tempfile
+
+            from negpy.infrastructure.capture.raw_demosaic import linear_demosaic
+
+            self.sensor_response_progress.emit(0.0, "Connecting…")
+            light = self._ensure_light(req.port)
+            on_camera = True
+            camera = self._acquire_camera()
+            settings = camera.read_settings()
+            shutter = settings.get("shutter") or {}
+            candidates = scan_ladder(o.get("label", "") for o in shutter.get("options", []))
+            if not candidates or not shutter.get("writable", True):
+                # The built-in ladder is one vendor's vocabulary; another body ignores it (#768).
+                raise RuntimeError("This camera is not reporting settable shutter speeds. Set it to Manual (M), then try again.")
+            aperture = settings.get("aperture") or {}
+            start_levels, start_shutter = normalize_start_point(
+                _setting_label(settings.get("iso")),
+                _setting_label(aperture) if aperture.get("writable", False) else "",
+                candidates=candidates,
+            )
+            service = CalibrationService(light, camera, lambda p: linear_demosaic(p, half_size=True), settle_s=req.settle_s)
+            with tempfile.TemporaryDirectory(prefix="negpy-sensor-") as scratch_dir:
+                response = service.measure_sensor_response(
+                    _SENSOR_ROI,
+                    os.path.join(scratch_dir, "capture.raw"),
+                    start_levels=start_levels,
+                    start_shutter=start_shutter,
+                    candidates=candidates,
+                    progress=self.sensor_response_progress.emit,
+                    cancel=_AnySet(req.cancel, self._cancel),
+                )
+            self.sensor_response_measured.emit(response)
+        except CalibrationExposureError as e:
+            logger.info("sensor measurement aborted: %s", e)
+            self.sensor_response_failed.emit(
+                f"The {e.channel} exposure clips even at the fastest shutter. Close the aperture or lower the ISO, then try again."
+            )
+        except Exception as e:
+            if req.cancel.is_set() or self._cancel.is_set():
+                return
+            logger.exception("sensor measurement failed")
+            if held and on_camera:
+                # A session someone else opened is dropped with the failure, so its windows hear of it.
+                held = False
+                self.live_view_failed.emit(str(e))
+            self.sensor_response_failed.emit(str(e))
+        finally:
+            if not held:
+                self._close_camera()
+            if any(self._idle_light) and self._light is not None:
+                try:
+                    self._light.set_color(*self._idle_light)
+                except Exception:
+                    logger.exception("failed to restore the Scanlight after the sensor measurement")
 
     def shutdown(self) -> None:
         """Stop any capture and release the light (called on app teardown)."""

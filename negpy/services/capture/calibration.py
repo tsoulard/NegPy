@@ -80,6 +80,10 @@ MIN_SIGNAL = 10.0  # counts; below this the channel read no real signal
 # A probe's own channel must reach this for its neighboring channels, a few percent of it, to
 # stand clear of the black level.
 MIN_PROFILE_SIGNAL = 0.05 * CLIP_CEILING
+# The sensor measurement shoots a probe again when its own channel reads under LOW of the
+# target, aiming at AIM: clear of the clip check, which a second probe at the target would trip.
+_SENSOR_PROBE_LOW = 0.4
+_SENSOR_PROBE_AIM = 0.7
 # ETTR meters p99.9, so the base can read on-target while a sliver clips. The base is the
 # whitepoint (blackpoint after inversion) and must stay just below clipping. This budgets
 # genuine, physically-lost data — the shape-based plateau detector, which finds the true
@@ -398,6 +402,15 @@ def nearest_shutter(label: str, candidates: tuple[str, ...]) -> str:
     return min(candidates, key=lambda c: abs(shutter_seconds(c) - target))
 
 
+def scan_ladder(labels) -> tuple[str, ...]:
+    """A body's shutter labels as the ladder a run solves on: parseable, fastest first, and
+    inside the built-in ladder's span. The slow end keeps the under-exposure cure reachable
+    for a closed-down aperture. The fast end keeps the PWM-lit LED out of banding: a short
+    exposure integrates too few pulses and meters noise."""
+    floor, ceiling = shutter_seconds(SHUTTER_CANDIDATES[0]), shutter_seconds(SHUTTER_CANDIDATES[-1])
+    return tuple(label for label in usable_ladder(tuple(str(v).strip() for v in labels)) if floor <= shutter_seconds(label) <= ceiling)
+
+
 def shutter_at_least(seconds: float, candidates: tuple[str, ...] = SHUTTER_CANDIDATES) -> str:
     """The fastest candidate whose exposure time is ≥ `seconds` (candidates are fastest-first).
 
@@ -457,22 +470,8 @@ class CalibrationService:
         cancel=None,
         single_capture: bool = False,
     ) -> CalibrationResult:
-        # Clean once, here: everything downstream indexes this ladder, so an unparseable
-        # label would crash mid-run (#478) instead of dropping out. Empty = the built-in ladder.
-        candidates = usable_ladder(tuple(candidates)) or SHUTTER_CANDIDATES
-        start_shutter = nearest_shutter(start_shutter, candidates)
+        candidates, start_shutter, _report, _check_cancel = _run_setup(candidates, start_shutter, progress, cancel)
         T = target_signal(target_fraction)
-
-        def _check_cancel():
-            if cancel is not None and cancel.is_set():
-                raise RuntimeError("calibration cancelled")
-
-        _floor = [0.0]
-
-        def _report(frac: float, msg: str):
-            _floor[0] = max(_floor[0], frac)
-            if progress is not None:
-                progress(_floor[0], msg)
 
         def _shoot(i: int, ch, level: int, shutter: str) -> tuple[float, float, float]:
             """Light channel `ch` at `level`, capture at `shutter`, meter → (base p99.9,
@@ -528,18 +527,10 @@ class CalibrationService:
         solve the three levels together, then verify with all three lit."""
         m = np.zeros((3, 3))
         mean_response = np.zeros((3, 3))
-        probe: dict[int, tuple[np.ndarray, np.ndarray, int, str]] = {}
-
-        def _probe(i: int, ch, level: int, shutter: str) -> tuple[float, float, float]:
-            signals, linearity, plateau, means = self._meter_rgb(ch.rgb(level), shutter, roi, scratch_path, clip_channels=(i,))
-            probe[i] = (signals, means, level, shutter)
-            return float(signals[i]), float(linearity[i]), float(plateau[i])
-
         for i, ch in enumerate(CAPTURE_ORDER):
             check_cancel()
             report(0.1 + 0.2 * i, f"Probing {ch.letter}…")
-            self._measure_response(i, ch, start_levels[i], start_shutter, candidates, _probe)
-            signals, means, level, shutter = probe[i]
+            signals, means, level, shutter = self._probe_led(i, ch, start_levels[i], start_shutter, candidates, roi, scratch_path)
             m[:, i] = signals / (level * true_seconds(shutter, candidates))
             mean_response[:, i] = means
 
@@ -556,6 +547,61 @@ class CalibrationService:
 
         report(1.0, "Calibration done")
         return CalibrationResult(channels=channels, spread_stops=spread, single_capture=True, sensor_matrix=_sensor_matrix(mean_response))
+
+    def _probe_led(self, i, ch, level, shutter, candidates, roi, scratch_path):
+        """Bring LED `ch` alone into the measurable range → (base p99.9, ROI mean), each one
+        value per sensor channel, and the level and shutter of that shot."""
+        shot: list = []
+
+        def _shoot(i: int, ch, level: int, shutter: str) -> tuple[float, float, float]:
+            signals, linearity, plateau, means = self._meter_rgb(ch.rgb(level), shutter, roi, scratch_path, clip_channels=(i,))
+            shot[:] = (signals, means, level, shutter)
+            return float(signals[i]), float(linearity[i]), float(plateau[i])
+
+        self._measure_response(i, ch, level, shutter, candidates, _shoot)
+        return tuple(shot)
+
+    def measure_sensor_response(
+        self,
+        roi: Roi,
+        scratch_path: str,
+        *,
+        start_levels: tuple[int, int, int] = REFERENCE_LEVELS,
+        start_shutter: str = REFERENCE_SHUTTER,
+        candidates: tuple[str, ...] = SHUTTER_CANDIDATES,
+        progress: Optional[ProgressCb] = None,
+        cancel=None,
+    ) -> np.ndarray:
+        """The sensor's response to each LED alone: `out[c][j]` is sensor channel c's ROI mean
+        under LED j. A probe that lands dim is shot again nearer the target, so the neighboring
+        channels stand clear of the black level.
+
+        Raises CalibrationExposureError("over") when minimum exposure still clips, and
+        RuntimeError when a probe stays under MIN_PROFILE_SIGNAL."""
+        candidates, start_shutter, report, check_cancel = _run_setup(candidates, start_shutter, progress, cancel)
+        T = target_signal(TARGET_FRACTION)
+        response = np.zeros((3, 3))
+        try:
+            for i, ch in enumerate(CAPTURE_ORDER):
+                check_cancel()
+                report(i / 3.0, f"Measuring {ch.letter}…")
+                signals, means, level, shutter = self._probe_led(i, ch, start_levels[i], start_shutter, candidates, roi, scratch_path)
+                if signals[i] < _SENSOR_PROBE_LOW * T:
+                    check_cancel()
+                    level, shutter = _raise_exposure(level, shutter, _SENSOR_PROBE_AIM * T / signals[i], candidates)
+                    signals, means, level, shutter = self._probe_led(i, ch, level, shutter, candidates, roi, scratch_path)
+                if means[i] < MIN_PROFILE_SIGNAL:
+                    raise RuntimeError(
+                        f"The {ch.letter} light is too dim to measure even at maximum exposure. Open the aperture or raise the ISO."
+                    )
+                response[:, i] = means
+            report(1.0, "Measured")
+            return response
+        finally:
+            try:
+                self._light.off()
+            except Exception:
+                logger.exception("failed to turn the Scanlight off after the sensor measurement")
 
     def _meter_rgb(self, rgb, shutter: str, roi: Roi, scratch_path: str, clip_channels=(0, 1, 2)):
         """Light `rgb`, capture at `shutter`, meter every sensor channel → (base p99.9,
@@ -782,6 +828,37 @@ def _solve_shared(k: dict[str, float], T: int, candidates: tuple[str, ...]) -> t
     secs = true_seconds(shutter, candidates)
     levels = {c: int(np.clip(round(T / (k[c] * secs)), PWM_MIN, PWM_MAX)) for c in k}
     return shutter, levels
+
+
+def _run_setup(candidates, start_shutter, progress, cancel):
+    """Shared start of a run → (usable ladder, start shutter on it, report, check_cancel).
+    Everything downstream indexes the ladder, so it is cleaned here: an unparseable label
+    would crash mid-run (#478). Empty = the built-in ladder."""
+    candidates = usable_ladder(tuple(candidates)) or SHUTTER_CANDIDATES
+    start_shutter = nearest_shutter(start_shutter, candidates)
+    floor = [0.0]
+
+    def report(frac: float, msg: str) -> None:
+        floor[0] = max(floor[0], frac)
+        if progress is not None:
+            progress(floor[0], msg)
+
+    def check_cancel() -> None:
+        if cancel is not None and cancel.is_set():
+            raise RuntimeError("calibration cancelled")
+
+    return candidates, start_shutter, report, check_cancel
+
+
+def _raise_exposure(level: int, shutter: str, gain: float, candidates: tuple[str, ...]) -> tuple[int, str]:
+    """Scale an exposure up by `gain`: the shutter first, then the LED for what the ladder
+    could not give."""
+    secs = true_seconds(shutter, candidates)
+    slower = _nearest_by_seconds(shutter_seconds(shutter) * gain, candidates)
+    if shutter_seconds(slower) < shutter_seconds(shutter):
+        slower = shutter
+    rest = gain * secs / true_seconds(slower, candidates)
+    return int(np.clip(round(level * rest), PWM_MIN, PWM_MAX)), slower
 
 
 def _sensor_matrix(mean_response: np.ndarray) -> Optional[tuple[float, ...]]:

@@ -92,7 +92,9 @@ class SensorSidebar(BaseSidebar):
             "scanned with narrowband light. Re-run Roll Analysis after changing this."
             "</td></tr></table>"
         )
-        self.calibrate_sensor_btn = self._icon_action("fa5s.vials", "Calibrate the sensor from three bare-light R/G/B exposures")
+        self.calibrate_sensor_btn = self._icon_action(
+            "fa5s.vials", "Calibrate the sensor from three bare-light R/G/B exposures: files, or the tethered camera"
+        )
         self.layout.addLayout(header_row(section_subheader("SINGLE-SHOT NARROWBAND CALIBRATION"), self.calibrate_sensor_btn))
         row.addWidget(self.sensor_label)
         row.addWidget(self.sensor_combo, 1)
@@ -349,7 +351,7 @@ class SensorSidebar(BaseSidebar):
         from negpy.desktop.view.widgets.sensor_calibration_dialog import SensorCalibrationDialog
 
         repo = self.controller.session.repo
-        dlg = SensorCalibrationDialog(parent=self, start_dir=last_open_folder(repo), repo=repo)
+        dlg = SensorCalibrationDialog(parent=self, start_dir=last_open_folder(repo), repo=repo, controller=self.controller)
         dlg.profile_saved.connect(self._on_sensor_profile_saved)
         dlg.exec()
 

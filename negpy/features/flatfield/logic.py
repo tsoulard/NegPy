@@ -17,6 +17,9 @@ _GAIN_MAX = 4.0
 # Falloff is low-frequency, so compute the gain on a small copy, upscaled at apply time,
 # and the blur kernel stays tiny.
 _GAIN_WORK_SIZE = 256
+# Blur sigma as a fraction of the long side: small enough to follow the light source's own
+# pattern, which repeats from shot to shot. A wider blur leaves it in the corrected frame.
+_BLUR_DIVISOR = 64.0
 
 # A reference pixel below _LIT_FRACTION of the bright level (_LIT_PERCENTILE of luminance)
 # is carrier, not falloff. A percentile, not the median, so a carrier that fills most of the
@@ -70,7 +73,7 @@ def compute_gain(reference: ImageBuffer) -> np.ndarray:
     scale = min(1.0, _GAIN_WORK_SIZE / max(h, w))
     if scale < 1.0:
         ref = cv2.resize(ref, (max(1, round(w * scale)), max(1, round(h * scale))), interpolation=cv2.INTER_AREA)
-    sigma = max(ref.shape[:2]) / 16.0
+    sigma = max(ref.shape[:2]) / _BLUR_DIVISOR
     eps = 1e-4
     lit = _lit_mask(ref)
     # Normalized convolution: a dark carrier edge in the reference would otherwise bleed into

@@ -77,7 +77,7 @@ automatically. There is no address to type, no login and no pairing.
 
 ## Scanning
 
-**Frame and focus.** Open **Live View & Scan**. Click anywhere on the image to aim the
+**Frame and focus.** Open **Live View**. Click anywhere on the image to aim the
 camera's *hardware* focus magnifier at that spot. Click again to return to the full frame.
 The **Focus meter** under the image reads live sharpness against the best value since the
 last click: turn the focus ring past best focus, then back until it reads **at peak**. It
@@ -102,7 +102,7 @@ three LEDs lit: each sensor channel also reads the neighboring LEDs, so the run 
 that overlap and lowers the levels to match. If the overlap leaves no levels that balance
 the channels, the run stops and says so. Calibrate a triplet preset instead.
 
-With **Sensor Profile** on, a Single Capture run also saves a
+With **Create Sensor Profile** on, a Single Capture run also saves a
 [sensor calibration](#sensor-calibration) profile under the preset's name, measured from the
 same exposures. A roll scanned with the preset takes that profile and turns Linear RAW on.
 Turn the toggle off to keep a profile you made yourself.
@@ -147,13 +147,146 @@ camera's color-filter passbands overlap the source's bands, so the green pixel s
 blue LED and some red, and every channel carries a share of its neighbours. It is a fixed
 property of your sensor and light pair, independent of the film.
 
-A Single Capture preset calibrated with **Sensor Profile** on measures this for you. To
-build a profile by hand, photograph the bare light three times with no film in the holder: red only,
-green only, blue only. Use the same settings you scan with, exposed just below clipping.
-Then open the **Calibration** panel, find *Single-Shot Narrowband Calibration*, press the calibrate
-button, pick the three captures, name the profile and save it. The selected profile un-mixes
-every scan with a 3×3 matrix in the linear domain, before inversion. Profiles are TOML
-files in the `NegPy/sensor` folder. Re-run **Roll Analysis** after you change the profile.
+There are three ways to build a profile, and they give near-identical corrections.
+[Sensor profile workflows](#sensor-profile-workflows) puts each one in a full scan:
+
+- **With a preset.** A Single Capture preset calibrated with **Create Sensor Profile** on saves a
+  profile under the preset's name, measured through the film base. Rolls scanned with the
+  preset take it automatically. Use this if you scan with Single Capture presets.
+- **Capture from Camera…** With the camera tethered, a Scanlight connected and no film in
+  the holder, open the **Calibration** panel, find *Single-Shot Narrowband Calibration*,
+  press the calibrate button, name the profile and press **Capture from Camera…**, then
+  confirm. NegPy lights each LED in turn, sets the shutter itself and saves the profile.
+  It uses the ISO and aperture the camera is set to, and needs no live view. One profile
+  serves every film stock. Use this for a rig you scan with outside the presets.
+- **From files.** Photograph the bare light three times with no film in the holder: red
+  only, green only, blue only, exposed just below clipping. In the same dialog, pick the
+  three captures, name the profile and save it. Use this for a light NegPy cannot control.
+
+A profile measured through the film base and one measured on the bare light differ
+slightly, because the base tints each LED's light. The leak also changes a little with
+the density of the picture, so no single profile is exact, and neither method is the more
+accurate one. One profile for a sensor and light pair is enough.
+
+The selected profile un-mixes every scan with a 3×3 matrix in the linear domain, before
+inversion. Profiles are TOML files in the `NegPy/sensor` folder. Re-run **Roll Analysis**
+after you change the profile.
+
+### Sensor profile workflows
+
+A profile is built in one of two places: the preset calibration that **+** opens in the
+**Preset & Light** panel, or the **Calibration** panel on the Roll tab. They differ in who assigns the profile to
+the roll. A preset that made its own profile assigns it on every scan. A profile from the
+Calibration panel is assigned by you, once per roll.
+
+| Your setup | Workflow | Profile built in | Assigned by |
+|---|---|---|---|
+| Tethered camera and Scanlight, calibrated preset | [A](#a-the-preset-makes-the-profile) | Preset calibration | The preset |
+| Tethered camera and Scanlight, calibrated preset, one profile for every preset | [B](#b-a-calibrated-preset-and-a-separate-profile) | Calibration panel | You |
+| Tethered camera and Scanlight, manual preset | [C](#c-a-manual-preset) | Calibration panel | You |
+| Files shot without NegPy | [D](#d-files-not-scanned-with-negpy) | Calibration panel | You |
+
+All four apply to single-shot narrowband frames only. A Triplet preset needs no profile.
+
+#### A. The preset makes the profile
+
+Use this when you scan with calibrated Single Capture presets and want nothing more to
+set. It is the default.
+
+Once per film stock:
+
+1. Load the film. In the **Preset & Light** panel, press **+** beside the preset
+   dropdown. The calibration window opens with its own live view.
+2. Set the ISO and the aperture you scan with, click the clear film base and name the
+   preset after the stock.
+3. Pick **Single Capture**, leave **Create Sensor Profile** on and press **Calibrate & Save**.
+
+For every roll of that stock, this one and later ones:
+
+1. Pick the preset in the dropdown.
+2. Scan the roll.
+
+What follows from it:
+
+- The preset and its profile are stored, so there is nothing to calibrate again for the
+  next roll of the same stock. Calibrate again when the camera, the lens, the light or
+  the film stock changes.
+- The preset holds the profile's name, and the profile is a file in the `NegPy/sensor`
+  folder. With that file deleted, the preset still scans and the roll gets no correction.
+
+- Every scan makes the preset's profile the roll's own and turns Linear RAW on. A profile
+  you pick by hand for that roll is replaced at the next scan.
+- The profile has the preset's name. Calibrating a preset again under the same name writes
+  the profile again, and so does any other profile saved under that name.
+- Each preset has its own profile, measured through that film's base.
+- The profile stays with the preset's rolls. It is not carried to frames opened or
+  scanned another way.
+
+#### B. A calibrated preset and a separate profile
+
+Use this when one profile is to serve every preset and film stock on the rig, when you
+already have a profile for this sensor and light, or when a preset calibration reports
+that its exposures were too dim to measure one.
+
+1. Build the profile once for the rig. Take the film out of the holder. In the
+   **Calibration** panel, turn **Linear RAW** on, press the calibrate button, name the
+   profile and press **Capture from Camera…**. To build it from three bare-light files
+   you shot yourself instead, pick them in the same dialog as in workflow D, step 1.
+2. Load the film. Calibrate the preset as in workflow A, with **Create Sensor Profile** off.
+3. Scan the first frame. In the **Calibration** panel, check that **Linear RAW** is on,
+   pick the profile under **Profile**, and press **Roll** on the panel header.
+4. Scan the rest of the roll. New frames take the roll's profile.
+5. Re-run **Roll Analysis** if frames were scanned before step 3.
+
+What follows from it:
+
+- The preset sets nothing on the roll. A roll with no profile picked is not corrected.
+- The profile is measured on the bare light, so it holds no film base. Its correction is
+  close to a preset's, not identical.
+- There is one profile to keep current. Build it again when the camera or the light
+  changes.
+- The profile is a Calibration setting, so it carries to the next frames you open. Set
+  **Profile** to *None* on a roll scanned under another light.
+
+#### C. A manual preset
+
+A manual preset is dialed in by hand. Nothing is metered, so it cannot make a profile,
+and a single-shot roll scanned with it has no correction until you pick one.
+
+1. Build the profile as in workflow B, step 1, or use one the rig already has.
+2. In the **Preset & Light** panel, pick **Create a manual preset…** from the preset
+   dropdown, set the levels and the exposure, set **Capture mode** to **Single Capture**
+   and save the preset.
+3. Scan the first frame, then assign the profile to the roll as in workflow B, step 3.
+
+What follows from it is the same as in workflow B. The profile does not depend on the LED
+levels or the shutter, so one profile serves a manual preset at any levels.
+
+#### D. Files not scanned with NegPy
+
+Use this for single-shot RAW files shot to the card, with other tethering software, or
+under an RGB light NegPy cannot control.
+
+1. Build the profile for the camera and light that shot the files. If that rig is a
+   camera NegPy can tether and a Scanlight, use **Capture from Camera…** as in workflow B.
+   If not, photograph the bare light three times with no film in the holder: red only,
+   green only, blue only, as RAW, exposed just below clipping. In the **Calibration**
+   panel, turn **Linear RAW** on, press the calibrate button, pick the three files, name
+   the profile and press **Compute and Save**.
+2. Open the roll. In the **Calibration** panel, turn **Linear RAW** and **Narrowband** on.
+3. Pick the profile under **Profile** and press **Roll** on the panel header.
+4. Re-run **Roll Analysis**.
+
+What follows from it:
+
+- The files must be camera RAW. The profile needs Linear RAW, and it is grayed out
+  without it.
+- A profile fits one sensor and light pair. Files from another camera or another light
+  need their own.
+- A light that cannot show one color at a time gives no way to measure a profile.
+- The profile carries to the next frames you open, as in workflow B.
+
+### When no profile applies
 
 Do not use it on RGB-triplet (trichrome) scans. They are crosstalk-free by construction,
 because each channel comes from its own single-light exposure, and NegPy skips the

@@ -109,7 +109,7 @@ def test_border_free_reference_matches_the_unmasked_gain():
     import cv2
 
     reference = _radial_falloff(128, 192)
-    sigma = 192 / 16.0
+    sigma = 192 / ff._BLUR_DIVISOR
     blur = cv2.GaussianBlur(reference, (0, 0), sigmaX=sigma, sigmaY=sigma)
     unmasked = blur.reshape(-1, 3).mean(axis=0) / blur
 
@@ -207,3 +207,15 @@ def test_thumbnail_ir_planes_are_cut_like_the_buffer():
     assert out["ir_preview"].shape == (100, 100)
     assert out["ir_preview"][0, 0] == 100
     assert out["detect_preview"] is None and out["x"] == 1
+
+
+def test_correction_follows_the_light_source_pattern():
+    h, w = 160, 240
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    # Soft LED hot spots behind a diffuser, a few percent deep.
+    pattern = 1.0 + 0.03 * np.cos(2 * np.pi * xx / 64.0) * np.cos(2 * np.pi * yy / 64.0)
+    reference = np.repeat(pattern[..., None], 3, axis=2)
+
+    corrected = reference * ff.compute_gain(reference)
+    interior = corrected[8:-8, 8:-8]
+    assert np.abs(interior / np.median(interior) - 1.0).max() < 0.01
