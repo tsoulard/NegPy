@@ -844,6 +844,7 @@ Corrects uneven illumination (vignetting, falloff) from a copy-stand or scanner 
 
 *   **Profile**, with **+** and **trash** on the FLAT FIELD CORRECTION header: **+** bakes a reference image into a named profile in NegPy's `flatfield` folder, after which the image can be deleted. **Trash** asks first; every frame using the profile loses its correction.
 *   **Apply Flat Field** (bulb toggle beside the dropdown): apply the selected profile to this roll, enabled once a profile exists.
+*   **Check Flat Field** (eye toggle): shows how well the selected profile corrects its own reference, from any frame and without the reference file. A good profile shows an even gray; a band or patch shows where it is off, and the stronger it is, the larger the error: full white or black is 10% or more. The status line gives the spread. A profile saved before this check shows the light it corrects instead; save it again to check it. Saving a profile warns when its reference is clipped or does not correct itself evenly.
 
 A newly chosen profile becomes the rig's default for the next roll.
 

@@ -93,6 +93,7 @@ class TestSettleOnlyWorkIsSkipped(unittest.TestCase):
                 compare_mode=False,
                 negative_peek=False,
                 embedded_peek=False,
+                flatfield_peek=False,
             ),
             image_updated=MagicMock(),
             _update_thumbnail_from_state=MagicMock(),

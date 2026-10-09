@@ -219,3 +219,60 @@ def test_correction_follows_the_light_source_pattern():
     corrected = reference * ff.compute_gain(reference)
     interior = corrected[8:-8, 8:-8]
     assert np.abs(interior / np.median(interior) - 1.0).max() < 0.01
+
+
+def _smooth_falloff(h: int = 128, w: int = 192) -> np.ndarray:
+    """Quadratic falloff at half brightness: smooth enough for the gain to follow, never clipped."""
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    r2 = (((yy - (h - 1) / 2) / ((h - 1) / 2)) ** 2 + ((xx - (w - 1) / 2) / ((w - 1) / 2)) ** 2) / 2
+    return np.repeat((0.5 * (1.0 - 0.3 * r2))[:, :, None], 3, axis=2).astype(np.float32)
+
+
+def test_check_reference_measures_its_own_self_correction():
+    reference = _smooth_falloff()
+    check = ff.check_reference(reference, ff.compute_gain(reference))
+    assert check.spread < ff.UNEVEN_LIMIT
+    assert not check.clipped
+
+
+def test_check_reference_flags_a_clipped_reference():
+    reference = np.clip(_smooth_falloff() * 2.5, 0.0, 1.0)
+    assert ff.check_reference(reference, ff.compute_gain(reference)).clipped
+
+
+def test_check_reference_reads_a_carrier_overcorrection():
+    reference = _smooth_falloff()
+    reference[-6:] = 0.005
+    bad_gain = ff.compute_gain(_smooth_falloff()) * np.linspace(1.0, 1.15, 128)[:, None, None]
+    assert ff.check_reference(reference, bad_gain).spread > ff.UNEVEN_LIMIT
+
+
+def test_evenness_reads_falloff_and_color_shading():
+    reference = _smooth_falloff()
+    reference[..., 0] *= np.linspace(1.0, 0.9, 192)[None, :]  # red fades to one side
+    check = ff.evenness(reference)
+    assert check.low < -0.1
+    assert check.color > 0.02
+    assert not check.clipped
+
+
+def test_evenness_view_is_gray_where_even_and_black_on_carrier():
+    image = np.full((64, 96, 3), 0.5, dtype=np.float32)
+    image[:4] = 0.0
+    view, check = ff.evenness_view(image)
+    np.testing.assert_allclose(view[10:-10, 10:-10], 0.5, atol=1e-6)
+    assert view[:4].max() == 0.0
+    assert check.spread < 1e-6
+
+
+def test_a_gain_view_shows_the_light_it_corrects():
+    gain = ff.compute_gain(_smooth_falloff())
+    view, _ = ff.evenness_view(1.0 / gain, span=ff.GAIN_VIEW_RANGE)
+    assert view[64, 96].mean() > view[2, 2].mean()  # brighter center, darker corner
+
+
+def test_a_profile_check_copy_is_finer_than_the_gain():
+    reference = _smooth_falloff(683, 1024)
+    assert max(ff.check_copy(reference).shape[:2]) == 512
+    assert max(ff.compute_gain(reference).shape[:2]) == 256
+    assert ff.check_reference(reference, ff.compute_gain(reference)).spread < ff.UNEVEN_LIMIT

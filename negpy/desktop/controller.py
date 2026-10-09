@@ -480,6 +480,7 @@ class AppController(QObject):
     flat_peek_changed = pyqtSignal(bool)
     negative_peek_changed = pyqtSignal(bool)
     embedded_peek_changed = pyqtSignal(bool)
+    flatfield_peek_changed = pyqtSignal(bool)
     zoom_requested = pyqtSignal(float)
     zoom_changed = pyqtSignal(float)
     _render_cleanup_requested = pyqtSignal(object)  # texture to spare, or None
@@ -2706,6 +2707,9 @@ class AppController(QObject):
         if self.state.embedded_peek:
             self.state.embedded_peek = False
             self.embedded_peek_changed.emit(False)
+        if self.state.flatfield_peek:
+            self.state.flatfield_peek = False
+            self.flatfield_peek_changed.emit(False)
 
         pending_import = self._pending_capture_imports.pop(_capture_import_key(file_path), None)
         if pending_import is not None and pending_import.process_mode is not None:
@@ -3671,6 +3675,9 @@ class AppController(QObject):
         if self.state.embedded_peek:
             self.state.embedded_peek = False
             self.embedded_peek_changed.emit(False)
+        if self.state.flatfield_peek:
+            self.state.flatfield_peek = False
+            self.flatfield_peek_changed.emit(False)
 
     def confirm_manual_crop(self) -> None:
         """Close the crop tool (committing the current rect) — invoked by a double-click
@@ -5434,12 +5441,29 @@ class AppController(QObject):
         """
         from negpy.services.assets.flatfield import FlatFieldProfiles
 
-        profile_id = FlatFieldProfiles.create(name, path)
-        if profile_id is None:
+        from negpy.features.flatfield.logic import UNEVEN_LIMIT
+
+        baked = FlatFieldProfiles.create_checked(name, path)
+        if baked is None:
             self.set_status("Flat Field: could not read that reference image", 3000, kind="error")
             return
+        profile_id, check = baked
         self.set_active_flatfield_profile(profile_id)
-        self.set_status(f"Flat Field profile '{name}' saved", 2000)
+        if check.clipped:
+            self.set_status(
+                f"Flat Field profile '{name}' saved, but the reference is clipped: shoot it darker to correct the falloff",
+                8000,
+                kind="warning",
+            )
+        elif check.spread > UNEVEN_LIMIT:
+            self.set_status(
+                f"Flat Field profile '{name}' saved, but it corrects its own reference only to ±{check.spread:.0%}: "
+                "look for a carrier edge, dust or a hot spot in the reference",
+                8000,
+                kind="warning",
+            )
+        else:
+            self.set_status(f"Flat Field profile '{name}' saved, even to ±{check.spread:.1%}", 3000)
 
     def delete_flatfield_profile(self, profile_id: str) -> None:
         """
@@ -6578,6 +6602,9 @@ class AppController(QObject):
             if self.state.embedded_peek:
                 self.state.embedded_peek = False
                 self.embedded_peek_changed.emit(False)
+            if self.state.flatfield_peek:
+                self.state.flatfield_peek = False
+                self.flatfield_peek_changed.emit(False)
             # Same reason the strip and the peek are exclusive: both want the canvas.
             self._clear_test_strip()
             self.state.compare_mode = True
@@ -6596,6 +6623,8 @@ class AppController(QObject):
             self._paint_negative_peek()
         elif self.state.embedded_peek:
             self._paint_embedded_peek()
+        elif self.state.flatfield_peek:
+            self._paint_flatfield_peek()
         elif self.state.flat_peek:
             self.request_render(readback_metrics=False, config_override=flat_master_config(self.state.config))
         else:
@@ -6664,6 +6693,9 @@ class AppController(QObject):
             if self.state.embedded_peek:
                 self.state.embedded_peek = False
                 self.embedded_peek_changed.emit(False)
+            if self.state.flatfield_peek:
+                self.state.flatfield_peek = False
+                self.flatfield_peek_changed.emit(False)
             self._clear_test_strip()
 
         self.state.flat_peek = target
@@ -6743,6 +6775,9 @@ class AppController(QObject):
             if self.state.embedded_peek:
                 self.state.embedded_peek = False
                 self.embedded_peek_changed.emit(False)
+            if self.state.flatfield_peek:
+                self.state.flatfield_peek = False
+                self.flatfield_peek_changed.emit(False)
             self._clear_test_strip()
 
         self.state.negative_peek = target
@@ -6843,6 +6878,9 @@ class AppController(QObject):
             if self.state.negative_peek:
                 self.state.negative_peek = False
                 self.negative_peek_changed.emit(False)
+            if self.state.flatfield_peek:
+                self.state.flatfield_peek = False
+                self.flatfield_peek_changed.emit(False)
             self._clear_test_strip()
 
         self.state.embedded_peek = target
@@ -6850,6 +6888,84 @@ class AppController(QObject):
 
         if target:
             self._paint_embedded_peek()
+        else:
+            self.request_render()
+
+    def _paint_flatfield_peek(self) -> None:
+        """Put the selected Flat Field profile's self-check on the canvas, whatever frame is open.
+
+        The profile's stored reference copy times its gain, each channel over its lit-area
+        median, ±EVENNESS_RANGE as black..white, so a good profile shows gray. A profile saved
+        before the copy was stored shows the light its gain corrects instead. Sensor layout:
+        the frame's geometry is not the reference's.
+        """
+        import cv2
+
+        from negpy.features.flatfield.logic import EVENNESS_RANGE, GAIN_VIEW_RANGE, evenness_view, self_corrected
+        from negpy.services.assets.flatfield import FlatFieldProfiles
+
+        profile_id = self.state.config.flatfield.profile_id
+        stored = FlatFieldProfiles.load_check(profile_id) if profile_id else None
+        if stored is None:
+            self.toggle_flatfield_peek(force=False)
+            return
+        profile = FlatFieldProfiles.get(profile_id)
+        name = profile.name if profile else profile_id
+        if stored.reference is not None:
+            view, measured = evenness_view(self_corrected(stored.reference, stored.gain))
+            check = stored.check or measured
+            clipped = ", reference clipped" if check.clipped else ""
+            message = (
+                f"Check Flat Field '{name}': {check.low:+.1%} to {check.high:+.1%}, color ±{check.color:.1%}{clipped}. "
+                f"Gray is even; full white or black is {EVENNESS_RANGE:.0%} off"
+            )
+        else:
+            view, _ = evenness_view(1.0 / stored.gain, span=GAIN_VIEW_RANGE)
+            message = (
+                f"Flat Field '{name}' was saved before the check: showing the light it corrects, "
+                "darker where there is less light. Save the profile again to check it"
+            )
+        h, w = view.shape[:2]
+        scale = APP_CONFIG.preview_render_size / max(h, w)
+        view = cv2.resize(view, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_LINEAR)
+        # Display-ready: the map is already black..white, so no working OETF.
+        self._store_peek_frame(view, splash=False, crop_preview_full=False)
+        self.set_status(message, 10000)
+
+    def toggle_flatfield_peek(self, force: Optional[bool] = None) -> None:
+        """Show how well the selected Flat Field profile corrects its own reference.
+
+        ``force`` sets an explicit state; otherwise toggles. Mutually exclusive with the
+        other peeks, the before/after compare view and the test strip. With no profile
+        selected it says so and stays off.
+        """
+        if self.state.preview_raw is None:
+            return
+        target = (not self.state.flatfield_peek) if force is None else force
+        if target == self.state.flatfield_peek:
+            return
+        if target and not self.state.config.flatfield.profile_id:
+            self.set_status("Choose a Flat Field profile to check", 3000)
+            self.flatfield_peek_changed.emit(False)
+            return
+
+        if target:
+            self.exit_compare()
+            for flag, signal in (
+                ("flat_peek", self.flat_peek_changed),
+                ("negative_peek", self.negative_peek_changed),
+                ("embedded_peek", self.embedded_peek_changed),
+            ):
+                if getattr(self.state, flag):
+                    setattr(self.state, flag, False)
+                    signal.emit(False)
+            self._clear_test_strip()
+
+        self.state.flatfield_peek = target
+        self.flatfield_peek_changed.emit(target)
+
+        if target:
+            self._paint_flatfield_peek()
         else:
             self.request_render()
 
@@ -7789,6 +7905,8 @@ class AppController(QObject):
             self._paint_negative_peek()
         elif self.state.embedded_peek:
             self._paint_embedded_peek()
+        elif self.state.flatfield_peek:
+            self._paint_flatfield_peek()
         else:
             self.state.peek_frame = None
             self.image_updated.emit()

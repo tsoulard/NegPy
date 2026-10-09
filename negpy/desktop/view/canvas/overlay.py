@@ -1113,6 +1113,7 @@ class CanvasOverlay(QWidget):
         content_aligned = (
             not self.state.flat_peek
             and not self.state.negative_peek
+            and not self.state.flatfield_peek
             and self._tool_mode not in UNCROPPED_PREVIEW_TOOLS
             and not self.state.canvas_value("crop_preview_full")
         )
@@ -1144,7 +1145,7 @@ class CanvasOverlay(QWidget):
             self._draw_compare_split(painter)
 
         # Exclusive with the split above, so the two badges cannot land on each other.
-        if self.state.negative_peek or self.state.embedded_peek or self.state.flat_peek:
+        if self.state.negative_peek or self.state.embedded_peek or self.state.flat_peek or self.state.flatfield_peek:
             self._draw_peek_badge(painter)
 
         # Last: the glass sits over everything else and claims no content rect, so it stays out
@@ -1270,7 +1271,14 @@ class CanvasOverlay(QWidget):
 
     def _draw_peek_badge(self, painter: QPainter) -> None:
         """Name the peek on the canvas. Otherwise only the toolbar says the view is on."""
-        text = "NEGATIVE" if self.state.negative_peek else ("EMBEDDED" if self.state.embedded_peek else "FLAT SCAN")
+        if self.state.negative_peek:
+            text = "NEGATIVE"
+        elif self.state.embedded_peek:
+            text = "EMBEDDED"
+        elif self.state.flatfield_peek:
+            text = "FLAT FIELD"
+        else:
+            text = "FLAT SCAN"
         rect = self._content_view_rect()
         if rect.isEmpty():
             return

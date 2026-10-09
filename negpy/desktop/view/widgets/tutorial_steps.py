@@ -57,7 +57,7 @@ def _put_down(w: "MainWindow") -> None:
         busy = (
             st.active_tool != ToolMode.NONE,
             st.test_strip or st.test_strip_pending,
-            st.negative_peek or st.embedded_peek or st.flat_peek,
+            st.negative_peek or st.embedded_peek or st.flat_peek or st.flatfield_peek,
             st.compare_mode,
             st.grain_focuser,
             st.zone_arm_target is not None,

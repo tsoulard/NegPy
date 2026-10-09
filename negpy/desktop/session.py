@@ -298,9 +298,11 @@ class AppState:
     negative_peek: bool = False
     # Transient: preview is showing the camera's own embedded preview, as a reference.
     embedded_peek: bool = False
-    # The canvas keys a negative or embedded peek painted. Kept out of last_metrics, which
-    # holds the print for the thumbnail, the memo and every measurement. It stays until the
-    # print is painted again, not until the peek flag drops.
+    # Transient: preview is showing the selected Flat Field profile's self-check.
+    flatfield_peek: bool = False
+    # The canvas keys a painted peek (negative, embedded, Check Flat Field) put on screen. Kept
+    # out of last_metrics, which holds the print for the thumbnail, the memo and every
+    # measurement. It stays until the print is painted again, not until the peek flag drops.
     peek_frame: Optional[Dict[str, Any]] = None
 
     # Linear Output: export the loader's raw decoded buffer as an untagged 16-bit TIFF.

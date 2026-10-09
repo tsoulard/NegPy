@@ -5094,6 +5094,149 @@ class TestEmbeddedPeek(unittest.TestCase):
             refresh.assert_called_once_with(persist=False)
 
 
+class TestFlatFieldPeek(unittest.TestCase):
+    """Check Flat Field: the selected profile's own reference, self-corrected, as an evenness map."""
+
+    setUp = TestEmbeddedPeek.setUp
+    tearDown = TestEmbeddedPeek.tearDown
+
+    @staticmethod
+    def _falloff():
+        import numpy as np
+
+        yy, xx = np.mgrid[0:32, 0:48].astype(np.float32)
+        r2 = (((yy - 15.5) / 15.5) ** 2 + ((xx - 23.5) / 23.5) ** 2) / 2
+        return np.repeat((0.5 * (1.0 - 0.3 * r2))[..., None], 3, axis=2).astype(np.float32)
+
+    def _select(self, stored):
+        from dataclasses import replace
+
+        from negpy.features.flatfield.models import FlatFieldConfig
+        from negpy.services.assets.flatfield import FlatFieldProfile, FlatFieldProfiles
+
+        state = self.controller.state
+        state.config = replace(state.config, flatfield=FlatFieldConfig(apply=False, profile_id="rig"))
+        for name, value in (("load_check", stored), ("get", FlatFieldProfile("rig", "Rig", 0.0, ""))):
+            patcher = patch.object(FlatFieldProfiles, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _stored(self, with_reference=True):
+        from negpy.features.flatfield import logic as ff
+        from negpy.services.assets.flatfield import StoredCheck
+
+        reference = self._falloff()
+        gain = ff.compute_gain(reference)
+        if not with_reference:
+            return StoredCheck(gain, None, None)
+        return StoredCheck(gain, reference, ff.check_reference(reference, gain))
+
+    def _status(self):
+        seen: list = []
+        self.controller.status_message_requested.connect(lambda msg, _t, _k: seen.append(msg))
+        return seen
+
+    def test_a_profile_paints_its_reference_even_gray_on_any_frame(self):
+        import numpy as np
+
+        self._select(self._stored())
+        seen = self._status()
+        print_buffer = object()
+        self.controller.state.last_metrics["base_positive"] = print_buffer
+        self.controller.toggle_flatfield_peek(force=True)
+
+        self.assertTrue(self.controller.state.flatfield_peek)
+        self.assertIs(self.controller.state.last_metrics["base_positive"], print_buffer, "the print stays in last_metrics")
+        view = self.controller.state.peek_frame["base_positive"]
+        h, w = view.shape[:2]
+        # 0.2 of the view is 4% of the source: the gain is too smooth to follow the outer pixels.
+        self.assertLess(np.abs(view[h // 5 : -h // 5, w // 5 : -w // 5] - 0.5).max(), 0.2)
+        self.assertFalse(self.controller.state.peek_frame["proof"])
+        self.assertIn("Check Flat Field 'Rig'", seen[-1])
+
+    def test_an_old_profile_shows_the_light_it_corrects(self):
+        self._select(self._stored(with_reference=False))
+        seen = self._status()
+        self.controller.toggle_flatfield_peek(force=True)
+
+        self.assertTrue(self.controller.state.flatfield_peek)
+        view = self.controller.state.peek_frame["base_positive"]
+        h, w = view.shape[:2]
+        self.assertGreater(view[h // 2, w // 2].mean(), view[1, 1].mean())
+        self.assertIn("saved before the check", seen[-1])
+
+    def test_with_no_profile_it_says_so_and_stays_off(self):
+        seen: list = []
+        self.controller.flatfield_peek_changed.connect(seen.append)
+        self.controller.toggle_flatfield_peek(force=True)
+        self.assertFalse(self.controller.state.flatfield_peek)
+        self.assertEqual(seen, [False], "the eye must not stay checked with no profile")
+
+    def test_a_profile_that_is_gone_closes_it(self):
+        self._select(None)
+        self.controller.toggle_flatfield_peek(force=True)
+        self.assertFalse(self.controller.state.flatfield_peek)
+
+    def test_the_peeks_are_mutually_exclusive(self):
+        self._select(self._stored())
+        self.controller.state.negative_peek = True
+        self.controller.toggle_flatfield_peek(force=True)
+        self.assertFalse(self.controller.state.negative_peek)
+
+        self.controller.toggle_negative_peek(force=True)
+        self.assertFalse(self.controller.state.flatfield_peek)
+
+    def test_leaving_it_re_renders_the_edit(self):
+        self.controller.state.flatfield_peek = True
+        with patch.object(self.controller, "request_render") as rr:
+            self.controller.toggle_flatfield_peek(force=False)
+        self.assertFalse(self.controller.state.flatfield_peek)
+        rr.assert_called_once()
+
+    def test_it_needs_a_loaded_frame(self):
+        self.controller.state.preview_raw = None
+        self.controller.toggle_flatfield_peek(force=True)
+        self.assertFalse(self.controller.state.flatfield_peek)
+
+
+class TestFlatFieldBakeCheck(unittest.TestCase):
+    """Saving a profile reports how evenly its reference corrects itself."""
+
+    setUp = TestEmbeddedPeek.setUp
+    tearDown = TestEmbeddedPeek.tearDown
+
+    def _save(self, check):
+        seen: list = []
+        self.controller.status_message_requested.connect(lambda msg, _t, kind: seen.append((msg, kind)))
+        with (
+            patch("negpy.services.assets.flatfield.FlatFieldProfiles.create_checked", return_value=("pid", check)),
+            patch.object(self.controller, "set_active_flatfield_profile"),
+        ):
+            self.controller.save_flatfield_profile("rig", "/flats/ref.arw")
+        return seen[-1]
+
+    def test_an_even_reference_saves_quietly(self):
+        from negpy.features.flatfield.logic import Evenness
+
+        msg, kind = self._save(Evenness(-0.01, 0.01, 0.005, False))
+        self.assertEqual(kind, "info")
+        self.assertIn("even to", msg)
+
+    def test_a_clipped_reference_warns(self):
+        from negpy.features.flatfield.logic import Evenness
+
+        msg, kind = self._save(Evenness(-0.01, 0.01, 0.005, True))
+        self.assertEqual(kind, "warning")
+        self.assertIn("clipped", msg)
+
+    def test_an_uneven_reference_warns(self):
+        from negpy.features.flatfield.logic import Evenness
+
+        msg, kind = self._save(Evenness(-0.02, 0.12, 0.005, False))
+        self.assertEqual(kind, "warning")
+        self.assertIn("12%", msg)
+
+
 class TestCompareFlatPeekInteraction(unittest.TestCase):
     """Before/After and flat-peek are mutually exclusive overlays; a geometry op must
     keep whichever one is active instead of dropping the user back to the plain edit."""

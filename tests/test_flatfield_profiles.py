@@ -9,6 +9,9 @@ from negpy.services.assets import flatfield as ffstore
 from negpy.services.assets.flatfield import FlatFieldProfiles
 
 
+_EVEN = ff.Evenness(low=-0.01, high=0.01, color=0.005, clipped=False)
+
+
 def _gain(h=24, w=32) -> np.ndarray:
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     g = 1.0 + 0.5 * (xx / w) + 0.25 * (yy / h)
@@ -19,7 +22,7 @@ def _gain(h=24, w=32) -> np.ndarray:
 def store_dir(tmp_path, monkeypatch):
     """Point the profile store at a temp dir and stub the RAW decode/bake."""
     monkeypatch.setattr(ffstore.APP_CONFIG, "flatfield_dir", str(tmp_path / "flatfield"), raising=False)
-    monkeypatch.setattr(FlatFieldProfiles, "_bake_gain", staticmethod(lambda path: _gain()))
+    monkeypatch.setattr(FlatFieldProfiles, "_bake_gain", staticmethod(lambda path: ffstore.Baked(_gain(), _EVEN, _gain() * 0.4)))
     return tmp_path
 
 
@@ -94,3 +97,29 @@ def test_metadata_reads_do_not_require_the_gain(store_dir):
     assert prof is not None and prof.name == "MetaOnly" and prof.k1 == 0.05
     assert ("meta-only", "MetaOnly") in FlatFieldProfiles.list_profiles()
     assert FlatFieldProfiles.load_gain("meta-only") is None  # no gain member to resolve
+
+
+def test_create_checked_returns_the_reference_check(store_dir):
+    baked = FlatFieldProfiles.create_checked("rig", "/fake/ref.dng")
+    assert baked is not None
+    pid, check = baked
+    assert FlatFieldProfiles.get(pid) is not None
+    assert check == _EVEN
+
+
+def test_a_checked_profile_stores_its_reference_copy_and_check(store_dir):
+    pid, _ = FlatFieldProfiles.create_checked("rig", "/fake/ref.dng")
+    stored = FlatFieldProfiles.load_check(pid)
+    assert stored is not None
+    np.testing.assert_allclose(stored.reference, _gain() * 0.4, rtol=1e-3)
+    assert stored.check == pytest.approx(_EVEN)
+
+
+def test_an_imported_gain_has_no_reference_copy(store_dir):
+    pid = FlatFieldProfiles.import_gain(_gain(), name="old")
+    stored = FlatFieldProfiles.load_check(pid)
+    assert stored is not None and stored.reference is None and stored.check is None
+
+
+def test_load_check_of_a_missing_profile_is_none(store_dir):
+    assert FlatFieldProfiles.load_check("ghost") is None
