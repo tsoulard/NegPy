@@ -601,7 +601,8 @@ class ControlsPanel(QWidget):
         exp.shadow_density_slider.setToolTip(
             tooltip_with_shortcut(
                 "Shadow zone density (ΔD): weighted to the deep shadows, bounded by paper black. "
-                "Positive darkens shadows; negative lifts them",
+                "Positive darkens shadows; negative lifts them. With Auto Grade on, it includes "
+                "the automatic shadow lift",
                 ["shadow_density_inc", "shadow_density_dec"],
             )
         )

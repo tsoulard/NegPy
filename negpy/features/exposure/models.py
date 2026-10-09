@@ -259,6 +259,12 @@ EXPOSURE_CONSTANTS: Dict[str, Any] = {
     "highlight_hold_percentile": 2.0,
     "highlight_hold_density": 0.10,
     "highlight_hold_max": 0.5,
+    # Auto Grade shadow hold: an automatic shadow zone lift (never a burn) of strength times
+    # the straight-line run of shadow reach's tail past its own line plus the overshoot,
+    # capped at shadow_hold_max. Partial, like auto_grade_strength. 0 = off.
+    "shadow_hold_strength": 0.40,
+    "shadow_hold_overshoot": 0.15,
+    "shadow_hold_max": 0.3,
     # Preflash threshold: the density above paper white that the ISO R range starts at.
     "preflash_threshold_density": 0.04,
     # Flat / digital-intermediate master (RenderIntent.FLAT). A log-video master:
@@ -295,6 +301,7 @@ TUNABLE_TARGETS: Dict[str, Tuple[float, float]] = {
     "auto_grade_strength": (0.0, 1.0),
     "shadow_reach_density": (1.4, 2.2),
     "highlight_hold_density": (0.0, 0.4),
+    "shadow_hold_strength": (0.0, 1.0),
 }
 DEFAULT_TARGETS: Dict[str, float] = {k: float(EXPOSURE_CONSTANTS[k]) for k in TUNABLE_TARGETS}
 

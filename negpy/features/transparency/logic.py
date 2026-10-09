@@ -226,6 +226,14 @@ def transfer_highlight_hold_density() -> float:
     return (float(c["highlight_hold_density"]) - d_min) / span * TRANSFER_DENSITY_RANGE
 
 
+def transfer_shadow_hold_start() -> float:
+    """Where Shadow Hold starts lifting on this curve: the shadow reach density plus
+    shadow_hold_overshoot, carried by tonal position like transfer_shadow_reach_density."""
+    c = EXPOSURE_CONSTANTS
+    span = float(c["d_max"]) - float(c["d_min"])
+    return transfer_shadow_reach_density() + float(c["shadow_hold_overshoot"]) / span * TRANSFER_DENSITY_RANGE
+
+
 def transfer_auto_terms(
     exposure: ExposureConfig,
     manual_offset: float,
@@ -234,12 +242,12 @@ def transfer_auto_terms(
     anchor: Optional[float],
     shadow_point: Optional[float],
     highlight_point: Optional[float],
-) -> Tuple[float, float, float]:
+) -> Tuple[float, float, float, float]:
     """
-    (exposure_offset, contrast, highlight_density_auto) with Auto Density/Auto Grade
-    folded onto the manual values -- single source for CPU and GPU. Mirrors the paper
-    path's own anchor placement, effective_grade_range, Shadow Reach and Highlight
-    Hold, restated on this curve's plain density-linear model instead of the paper's
+    (exposure_offset, contrast, highlight_density_auto, shadow_density_auto) with Auto
+    Density/Auto Grade folded onto the manual values -- single source for CPU and GPU. Mirrors
+    the paper path's own anchor placement, effective_grade_range, Shadow Reach, Highlight
+    Hold and Shadow Hold, restated on this curve's plain density-linear model instead of the paper's
     toe/shoulder one. A toggle off, or a None meter, leaves its terms at their manual values.
     """
     c = TRANSFER_CONSTANTS
@@ -284,7 +292,16 @@ def transfer_auto_terms(
             w_hi = 1.0 - _fast_sigmoid(k_zone * (d_highlight - hi_c))
             highlight_auto = min((target - d_highlight) / max(w_hi, 1e-6), float(EXPOSURE_CONSTANTS["highlight_hold_max"]))
 
-    return offset, contrast, highlight_auto
+    # Shadow Hold: a partial shadow-zone lift on the same tail as Shadow Reach. Never burns.
+    shadow_auto = 0.0
+    strength = float(EXPOSURE_CONSTANTS["shadow_hold_strength"])
+    if exposure.auto_normalize_contrast and shadow_point is not None and strength > 0.0:
+        d_shadow = pivot + (float(shadow_point) * R - offset - pivot) * contrast
+        over = d_shadow - transfer_shadow_hold_start()
+        if over > 0.0:
+            shadow_auto = -min(strength * over, float(EXPOSURE_CONSTANTS["shadow_hold_max"]))
+
+    return offset, contrast, highlight_auto, shadow_auto
 
 
 def transfer_curve_params(
@@ -312,10 +329,10 @@ def transfer_curve_params(
     return exposure_offset, contrast, toe3, sh3
 
 
-def _transfer_totals(exposure: ExposureConfig, metrics: Mapping[str, Any]) -> Tuple[float, float, float, float]:
-    """(manual offset, total offset, total contrast, highlight hold) for `exposure`."""
+def _transfer_totals(exposure: ExposureConfig, metrics: Mapping[str, Any]) -> Tuple[float, float, float, float, float]:
+    """(manual offset, total offset, total contrast, highlight hold, shadow hold) for `exposure`."""
     manual_offset, manual_contrast, _, _ = transfer_curve_params(exposure)
-    offset, contrast, hl_auto = transfer_auto_terms(
+    offset, contrast, hl_auto, sh_auto = transfer_auto_terms(
         exposure,
         manual_offset,
         manual_contrast,
@@ -324,7 +341,7 @@ def _transfer_totals(exposure: ExposureConfig, metrics: Mapping[str, Any]) -> Tu
         metrics.get("shadow_point"),
         metrics.get("highlight_point"),
     )
-    return manual_offset, offset, contrast, hl_auto
+    return manual_offset, offset, contrast, hl_auto, sh_auto
 
 
 def _offset_per_density() -> float:
@@ -333,8 +350,8 @@ def _offset_per_density() -> float:
 
 def transfer_shown_values(exposure: ExposureConfig, metrics: Mapping[str, Any]) -> Dict[str, float]:
     """Transfer-curve twin of auto_sliders.print_shown_values: the manual Density, Grade
-    and Highlights Density that print what the active, metered autos print."""
-    _, offset, contrast, hl_auto = _transfer_totals(exposure, metrics)
+    and Shadows/Highlights Density that print what the active, metered autos print."""
+    _, offset, contrast, hl_auto, sh_auto = _transfer_totals(exposure, metrics)
     shown: Dict[str, float] = {}
     if exposure.auto_exposure and metrics.get("metered_anchor") is not None:
         shown["density"] = 1.0 - offset / _offset_per_density()
@@ -342,6 +359,8 @@ def transfer_shown_values(exposure: ExposureConfig, metrics: Mapping[str, Any]) 
         shown["grade"] = float(TRANSFER_CONSTANTS["transfer_grade_ref"]) / contrast
     if exposure.auto_normalize_contrast and metrics.get("highlight_point") is not None:
         shown["highlight_density"] = exposure.highlight_density + hl_auto
+    if exposure.auto_normalize_contrast and metrics.get("shadow_point") is not None:
+        shown["shadow_density"] = exposure.shadow_density + sh_auto
     return shown
 
 
@@ -349,7 +368,7 @@ def transfer_stored_value(exposure: ExposureConfig, metrics: Mapping[str, Any], 
     """Inverse of transfer_shown_values for one field."""
     if field not in transfer_shown_values(exposure, metrics):
         return shown
-    manual_offset, offset, _, hl_auto = _transfer_totals(exposure, metrics)
+    manual_offset, offset, _, hl_auto, sh_auto = _transfer_totals(exposure, metrics)
     if field == "density":
         return shown + (offset - manual_offset) / _offset_per_density()
     if field == "grade":
@@ -357,6 +376,8 @@ def transfer_stored_value(exposure: ExposureConfig, metrics: Mapping[str, Any], 
         k_ref = grade_to_slope(float(c["transfer_grade_ref"]), TRANSFER_DENSITY_RANGE)
         slope = float(c["transfer_grade_ref"]) / shown * k_ref
         return slope_to_grade(slope, effective_grade_range(True, TRANSFER_DENSITY_RANGE, metrics["textural_range"]))
+    if field == "shadow_density":
+        return shown - sh_auto
     return shown - hl_auto
 
 

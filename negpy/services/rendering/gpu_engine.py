@@ -1613,6 +1613,7 @@ class GPUEngine:
             local_ev_scale,
             paper_dmin_rgb,
             highlight_hold_offset,
+            shadow_hold_offset,
             per_channel_curve_params,
             per_channel_midtone_gamma,
             per_channel_widths,
@@ -1626,7 +1627,7 @@ class GPUEngine:
         tc = TRANSFER_CONSTANTS
         t_exp0, t_contrast0, t_toe3, t_sh3 = transfer_curve_params(settings.exposure)
         # Auto Density/Auto Grade, restated on this curve; each follows its toggle.
-        t_exp, t_contrast, t_hl_auto = transfer_auto_terms(
+        t_exp, t_contrast, t_hl_auto, t_sh_auto = transfer_auto_terms(
             settings.exposure, t_exp0, t_contrast0, textural_range, metered_anchor, shadow_point, highlight_point
         )
         t_tw3, t_sw3 = transfer_widths(settings.exposure)
@@ -1682,7 +1683,7 @@ class GPUEngine:
             + struct.pack("ffff", t_cmy[0], t_cmy[1], t_cmy[2], 0.0)
             + struct.pack(
                 "ffff",
-                float(settings.exposure.shadow_density),
+                float(settings.exposure.shadow_density + t_sh_auto),
                 float(settings.exposure.highlight_density + t_hl_auto),
                 float(t_sh_c),
                 float(t_hi_c),
@@ -1760,6 +1761,11 @@ class GPUEngine:
         hl_auto = (
             highlight_hold_offset(slopes[1], pivots[1], highlight_point, d_min=d_min, paper=paper, preflash=exp.preflash, grade=exp.grade)
             if exp.auto_normalize_contrast and highlight_point is not None
+            else 0.0
+        )
+        sh_auto = (
+            shadow_hold_offset(slopes[1], pivots[1], shadow_point, d_min=d_min, paper=paper)
+            if exp.auto_normalize_contrast and shadow_point is not None
             else 0.0
         )
         cmy_m = EXPOSURE_CONSTANTS["cmy_max_density"]
@@ -1871,7 +1877,7 @@ class GPUEngine:
                 _sw3[0],
                 # Zone Density ΔD shadow offset in the ex-d_min slot; the highlight offset
                 # rides d_min_rgb.w.
-                exp.shadow_density,
+                exp.shadow_density + sh_auto,
                 pc["d_max"],
                 pc["toe_sharpness_base"],
                 pc["shoulder_sharpness_base"],

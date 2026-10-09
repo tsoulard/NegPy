@@ -138,7 +138,7 @@ class TransferProcessor:
         deliberate colour cast is the photograph.
         """
         exposure_offset, contrast, toe3, sh3 = transfer_curve_params(self.config)
-        exposure_offset, contrast, highlight_auto = transfer_auto_terms(
+        exposure_offset, contrast, highlight_auto, shadow_auto = transfer_auto_terms(
             self.config,
             exposure_offset,
             contrast,
@@ -184,7 +184,7 @@ class TransferProcessor:
             cmy_offsets,
             tw3,
             sw3,
-            shadow_density=self.config.shadow_density,
+            shadow_density=self.config.shadow_density + shadow_auto,
             highlight_density=self.config.highlight_density + highlight_auto,
             shadow_cmy=shadow_cmy,
             highlight_cmy=highlight_cmy,

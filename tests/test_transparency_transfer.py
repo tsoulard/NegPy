@@ -32,6 +32,7 @@ from negpy.features.transparency.logic import (
     transfer_bounds,
     transfer_curve_params,
     transfer_highlight_hold_density,
+    transfer_shadow_hold_start,
     transfer_shadow_reach_density,
     transfer_widths,
 )
@@ -785,14 +786,14 @@ class TestTransferAutoTerms(unittest.TestCase):
     def test_none_inputs_leave_everything_manual(self):
         """A None meter must win over the toggles being on."""
         exp = self._exp(auto_exposure=True, auto_normalize_contrast=True)
-        offset, contrast, hl_auto = transfer_auto_terms(exp, 0.3, 1.4, None, None, None, None)
+        offset, contrast, hl_auto, _ = transfer_auto_terms(exp, 0.3, 1.4, None, None, None, None)
         self.assertAlmostEqual(offset, 0.3)
         self.assertAlmostEqual(contrast, 1.4)
         self.assertEqual(hl_auto, 0.0)
 
     def test_toggles_off_leave_everything_manual_even_with_real_metrics(self):
         exp = self._exp(auto_exposure=False, auto_normalize_contrast=False)
-        offset, contrast, hl_auto = transfer_auto_terms(exp, 0.3, 1.4, 0.6, 0.5, 0.7, 0.1)
+        offset, contrast, hl_auto, _ = transfer_auto_terms(exp, 0.3, 1.4, 0.6, 0.5, 0.7, 0.1)
         self.assertAlmostEqual(offset, 0.3)
         self.assertAlmostEqual(contrast, 1.4)
         self.assertEqual(hl_auto, 0.0)
@@ -800,7 +801,7 @@ class TestTransferAutoTerms(unittest.TestCase):
     def test_auto_density_places_the_metered_anchor_at_the_contrast_pivot(self):
         exp = self._exp(auto_exposure=True, auto_normalize_contrast=False)
         anchor = 0.5
-        offset, contrast, _ = transfer_auto_terms(exp, 0.0, 1.0, None, anchor, None, None)
+        offset, contrast, _, _ = transfer_auto_terms(exp, 0.0, 1.0, None, anchor, None, None)
         pivot = float(TRANSFER_CONSTANTS["transfer_contrast_pivot"])
         d_anchor_final = anchor * TRANSFER_DENSITY_RANGE - offset
         self.assertAlmostEqual(d_anchor_final, pivot, places=6)
@@ -810,21 +811,21 @@ class TestTransferAutoTerms(unittest.TestCase):
         exp = self._exp(auto_exposure=True, auto_normalize_contrast=True)
         # A flat, low-textural-range frame so Auto Grade alone barely moves contrast,
         # with a shadow point far below the anchor so reaching the target needs a push.
-        offset, contrast, _ = transfer_auto_terms(exp, 0.0, 1.0, 2.5, 0.25, 0.9, 0.1)
+        offset, contrast, _, _ = transfer_auto_terms(exp, 0.0, 1.0, 2.5, 0.25, 0.9, 0.1)
         pivot = float(TRANSFER_CONSTANTS["transfer_contrast_pivot"])
         d_shadow_final = pivot + (0.9 * TRANSFER_DENSITY_RANGE - offset - pivot) * contrast
         self.assertGreaterEqual(d_shadow_final, transfer_shadow_reach_density() - 1e-6)
 
     def test_shadow_reach_never_lowers_the_contrast_auto_grade_already_picked(self):
         exp = self._exp(auto_exposure=True, auto_normalize_contrast=True)
-        _, base_contrast, _ = transfer_auto_terms(exp, 0.0, 1.0, 2.5, 0.25, None, None)
-        _, with_reach, _ = transfer_auto_terms(exp, 0.0, 1.0, 2.5, 0.25, 0.9, 0.1)
+        _, base_contrast, _, _ = transfer_auto_terms(exp, 0.0, 1.0, 2.5, 0.25, None, None)
+        _, with_reach, _, _ = transfer_auto_terms(exp, 0.0, 1.0, 2.5, 0.25, 0.9, 0.1)
         self.assertGreaterEqual(with_reach, base_contrast - 1e-9)
 
     def test_shadow_reach_is_a_noop_without_span_between_anchor_and_shadow_point(self):
         exp = self._exp(auto_exposure=True, auto_normalize_contrast=True)
-        _, base_contrast, _ = transfer_auto_terms(exp, 0.0, 1.0, 2.5, 0.25, None, None)
-        _, degenerate, _ = transfer_auto_terms(exp, 0.0, 1.0, 2.5, 0.25, 0.25, 0.1)
+        _, base_contrast, _, _ = transfer_auto_terms(exp, 0.0, 1.0, 2.5, 0.25, None, None)
+        _, degenerate, _, _ = transfer_auto_terms(exp, 0.0, 1.0, 2.5, 0.25, 0.25, 0.1)
         self.assertAlmostEqual(degenerate, base_contrast)
 
     def test_highlight_hold_burns_only_when_the_highlight_is_too_bright(self):
@@ -832,17 +833,34 @@ class TestTransferAutoTerms(unittest.TestCase):
         target = transfer_highlight_hold_density()
         too_bright = target / TRANSFER_DENSITY_RANGE * 0.3  # well under target
         already_holds = min(1.0, (target * 3.0) / TRANSFER_DENSITY_RANGE)  # comfortably over target
-        _, _, hl_bright = transfer_auto_terms(exp, 0.0, 1.0, None, None, None, too_bright)
-        _, _, hl_holds = transfer_auto_terms(exp, 0.0, 1.0, None, None, None, already_holds)
+        _, _, hl_bright, _ = transfer_auto_terms(exp, 0.0, 1.0, None, None, None, too_bright)
+        _, _, hl_holds, _ = transfer_auto_terms(exp, 0.0, 1.0, None, None, None, already_holds)
         self.assertGreater(hl_bright, 0.0)
         self.assertEqual(hl_holds, 0.0)
 
     def test_highlight_hold_is_capped(self):
         exp = self._exp(auto_exposure=False, auto_normalize_contrast=True)
-        _, _, hl_auto = transfer_auto_terms(exp, 0.0, 1.0, None, None, None, 1e-6)
+        _, _, hl_auto, _ = transfer_auto_terms(exp, 0.0, 1.0, None, None, None, 1e-6)
         from negpy.features.exposure.models import EXPOSURE_CONSTANTS
 
         self.assertLessEqual(hl_auto, float(EXPOSURE_CONSTANTS["highlight_hold_max"]) + 1e-9)
+
+    def test_shadow_hold_lifts_only_a_tail_past_its_start(self):
+        exp = self._exp(auto_exposure=False, auto_normalize_contrast=True)
+        start = transfer_shadow_hold_start()
+        _, _, _, sh_far = transfer_auto_terms(exp, 0.0, 1.0, None, None, (start + 0.3) / TRANSFER_DENSITY_RANGE, None)
+        _, _, _, sh_near = transfer_auto_terms(exp, 0.0, 1.0, None, None, (start - 0.1) / TRANSFER_DENSITY_RANGE, None)
+        from negpy.features.exposure.models import EXPOSURE_CONSTANTS
+
+        self.assertAlmostEqual(sh_far, -float(EXPOSURE_CONSTANTS["shadow_hold_strength"]) * 0.3, places=6)
+        self.assertEqual(sh_near, 0.0)
+
+    def test_shadow_hold_is_capped(self):
+        exp = self._exp(auto_exposure=False, auto_normalize_contrast=True)
+        _, _, _, sh_auto = transfer_auto_terms(exp, 0.0, 1.0, None, None, 5.0, None)
+        from negpy.features.exposure.models import EXPOSURE_CONSTANTS
+
+        self.assertEqual(sh_auto, -float(EXPOSURE_CONSTANTS["shadow_hold_max"]))
 
     def test_derived_constants_sit_inside_the_fixed_window(self):
         for value in (transfer_shadow_reach_density(), transfer_highlight_hold_density()):

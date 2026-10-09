@@ -6,6 +6,7 @@ import pytest
 from negpy.features.exposure.auto_sliders import print_shown_values, print_stored_value
 from negpy.features.exposure.logic import (
     auto_highlight_from_metrics,
+    auto_shadow_from_metrics,
     curve_params_from_metrics,
 )
 from negpy.features.exposure.models import ExposureConfig
@@ -36,16 +37,17 @@ def _metrics(**over):
 
 def _edited(**over):
     """A frame with trims on top of both autos."""
-    fields = dict(density=1.15, grade=105.0, highlight_density=0.08)
+    fields = dict(density=1.15, grade=105.0, shadow_density=-0.04, highlight_density=0.08)
     fields.update(over)
     return ExposureConfig(**fields)
 
 
 def _printed(exposure, metrics):
-    """What the print stage applies: curve params and the total highlight density."""
+    """What the print stage applies: curve params and the total shadow and highlight densities."""
     slopes, pivots, curvs = curve_params_from_metrics(exposure, MODE, metrics)
     hl = exposure.highlight_density + auto_highlight_from_metrics(exposure, MODE, metrics)
-    return np.array([*slopes, *pivots, *curvs, hl])
+    sh = exposure.shadow_density + auto_shadow_from_metrics(exposure, MODE, metrics)
+    return np.array([*slopes, *pivots, *curvs, hl, sh])
 
 
 @pytest.mark.parametrize("shadow_point", [None, 0.93, 0.99])
@@ -56,7 +58,8 @@ def test_shown_values_are_what_prints(shadow_point):
 
     manual = replace(exposure, auto_exposure=False, auto_normalize_contrast=False, **shown)
     np.testing.assert_allclose(_printed(manual, metrics), _printed(exposure, metrics), atol=1e-9)
-    assert set(shown) == {"density", "grade", "highlight_density"}
+    expected = {"density", "grade", "highlight_density"} | ({"shadow_density"} if shadow_point is not None else set())
+    assert set(shown) == expected
 
 
 def test_shown_values_follow_the_meter():
@@ -67,7 +70,7 @@ def test_shown_values_follow_the_meter():
     assert print_shown_values(exposure, MODE, _metrics(textural_range=1.2))["grade"] > dense["grade"]
 
 
-@pytest.mark.parametrize("field", ["density", "grade", "highlight_density"])
+@pytest.mark.parametrize("field", ["density", "grade", "shadow_density", "highlight_density"])
 def test_stored_value_inverts_shown(field):
     metrics = _metrics()
     exposure = _edited()
@@ -80,7 +83,7 @@ def test_off_or_unmetered_autos_show_nothing():
     assert print_shown_values(exposure, MODE, _metrics()) == {}
     assert print_shown_values(ExposureConfig(), MODE, {}) == {}
     # A GPU render with Auto Grade just switched on publishes None for its meters.
-    partial = print_shown_values(ExposureConfig(), MODE, _metrics(textural_range=None, highlight_point=None))
+    partial = print_shown_values(ExposureConfig(), MODE, _metrics(textural_range=None, shadow_point=None, highlight_point=None))
     assert set(partial) == {"density"}
 
 
@@ -91,7 +94,7 @@ def test_stored_value_passes_through_without_a_meter():
 
 def _transfer_printed(exposure, metrics):
     offset, contrast, _, _ = transfer_curve_params(exposure)
-    offset, contrast, hl_auto = transfer_auto_terms(
+    offset, contrast, hl_auto, sh_auto = transfer_auto_terms(
         exposure,
         offset,
         contrast,
@@ -100,7 +103,7 @@ def _transfer_printed(exposure, metrics):
         metrics.get("shadow_point"),
         metrics.get("highlight_point"),
     )
-    return np.array([offset, contrast, exposure.highlight_density + hl_auto])
+    return np.array([offset, contrast, exposure.highlight_density + hl_auto, exposure.shadow_density + sh_auto])
 
 
 @pytest.mark.parametrize("textural", [0.6, 1.4, 2.2])

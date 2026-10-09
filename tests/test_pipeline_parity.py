@@ -254,6 +254,35 @@ class TestExposureParity:
         )
         self._run_and_compare(s)
 
+    def test_shadow_hold_lift_matches(self):
+        from negpy.domain.interfaces import PipelineContext
+        from negpy.features.exposure.logic import auto_shadow_from_metrics
+        from negpy.features.exposure.models import EXPOSURE_CONSTANTS
+
+        s = replace(_make_base_settings(), exposure=ExposureConfig(auto_exposure=True, auto_normalize_contrast=True, grade=50.0))
+        h, w = self.img.shape[:2]
+        ctx = PipelineContext(scale_factor=1.0, original_size=(h, w), process_mode=s.process.process_mode)
+        DarkroomEngine().process(self.img, s, "parity_shadow_hold", ctx)
+        assert auto_shadow_from_metrics(s.exposure, s.process.process_mode, ctx.metrics) < -0.05
+
+        def both() -> tuple:
+            cpu = DarkroomEngine().process(self.img, s, "parity_shadow_hold")
+            tex, _ = self.gpu.process_to_texture(self.img, s, scale_factor=max(h, w) / 1024.0, apply_layout=False, readback_metrics=False)
+            return cpu, self.gpu._readback_downsampled(tex)
+
+        cpu_on, gpu_on = both()
+        saved = EXPOSURE_CONSTANTS["shadow_hold_strength"]
+        EXPOSURE_CONSTANTS["shadow_hold_strength"] = 0.0
+        try:
+            self.gpu.destroy_all()
+            self.gpu = GPUEngine()
+            cpu_off, gpu_off = both()
+        finally:
+            EXPOSURE_CONSTANTS["shadow_hold_strength"] = saved
+        cpu_delta, gpu_delta = cpu_on - cpu_off, gpu_on - gpu_off
+        assert np.max(np.abs(cpu_delta)) > 0.02
+        _assert_mostly_close(cpu_delta, gpu_delta, atol=2e-2, rtol=0.0, max_violation_frac=0.01)
+
     def test_paper_profile_ra4(self):
         # A non-default RA4 profile changes per-channel slopes, tint, and the
         # tonal curve constants — guards the new uniform/slope path's parity.

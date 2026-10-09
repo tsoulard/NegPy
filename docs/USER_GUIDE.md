@@ -416,7 +416,7 @@ Color timing, like enlarger dichroic filters. The **Global / Shadows / Highlight
 **Automatic helpers**, in the **Auto** menu (magic-wand icon) beside the channel selector, on by default:
 
 *   **Auto Density**: meters each frame's midtone and anchors print brightness there.
-*   **Auto Grade**: sets the grade partly from the frame's textured density range, harder when needed so textured shadows reach black (Shadow Reach), and holds textured highlights off paper white (Highlight Hold).
+*   **Auto Grade**: sets the grade partly from the frame's textured density range, harder when needed so textured shadows reach black (Shadow Reach), opens the shadows of a contrasty frame (Shadow Hold), and holds textured highlights off paper white (Highlight Hold).
 *   **Auto Density and Grade**: turns both helpers on or off together.
 *   **Set Targets…** (last item in the Auto menu): the brightness and contrast the helpers aim for, for all frames.
 *   With a helper on, its sliders show what prints: **Print Density** the metered density, **ISO-R Grade** the grade the frame prints at, **Highlights Density** with the automatic burn. Moving one trims the helper, the tick marks the helper's own choice and a double-click returns to it. Turning a helper off drops its share, so the sliders show your own values; turning it on adds it back.
@@ -431,7 +431,7 @@ Color timing, like enlarger dichroic filters. The **Global / Shadows / Highlight
 
 *   **Print Density** (0.0 to 2.0): overall brightness (enlarger time). Lower is brighter.
 *   **ISO-R Grade** (50 to 180): contrast as paper ISO-R. R110 is about grade 2; **lower R is harder**. In R/G/B mode a **Grade** trim rotates one layer's slope about the midtone.
-*   **Shadows Density** (±0.9 ΔD) / **Highlights Density** (±0.5 ΔD): brighten or darken only the shadows or highlights, within paper black and white. They also work on slides.
+*   **Shadows Density** / **Highlights Density** (±1.0 ΔD): brighten or darken only the shadows or highlights, within paper black and white. With Auto Grade on, each shows its automatic share (Shadow Hold's lift, Highlight Hold's burn). They also work on slides.
 *   **Shadows Grade** / **Highlights Grade** (split grade, ±50 ISO-R): local contrast in the deep shadows or highlights.
 *   **Preflash** (0 to 1): an even flash over the sheet, as a fraction of the paper's threshold exposure. It pulls highlight detail off paper white and softens the print slightly; bare paper stays white. Hidden on slides.
 *   **Contrast Mask** (±0.5, hidden in Transparency): a blurred mask sandwiched with the negative; the value is its signed gamma. Positive compresses the range by (1 − gamma) so a harder grade fits, keeping fine detail. Negative expands the range by (1 + gamma) for a negative too flat for Grade; past about −0.4, highlights clip. Past about ±0.2, strong edges get a halo.

@@ -10,6 +10,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 from negpy.features.exposure.logic import (
     auto_base_slope,
     auto_highlight_from_metrics,
+    auto_shadow_from_metrics,
     effective_grade_range,
     grade_to_slope,
     slope_to_grade,
@@ -18,7 +19,7 @@ from negpy.features.exposure.models import ExposureConfig
 from negpy.features.exposure.papers import effective_constants, effective_paper_profile
 
 # The offsets at which the meter alone decides.
-NEUTRAL: Dict[str, float] = {f: float(getattr(ExposureConfig(), f)) for f in ("density", "grade", "highlight_density")}
+NEUTRAL: Dict[str, float] = {f: float(getattr(ExposureConfig(), f)) for f in ("density", "grade", "shadow_density", "highlight_density")}
 
 
 def _paper(exposure: ExposureConfig, process_mode: Optional[str]) -> Tuple[Any, float]:
@@ -56,6 +57,8 @@ def print_shown_values(exposure: ExposureConfig, process_mode: Optional[str], me
         shown["grade"] = slope_to_grade(slope, metrics["norm_density_range"])
     if exposure.auto_normalize_contrast and metrics.get("highlight_point") is not None:
         shown["highlight_density"] = exposure.highlight_density + auto_highlight_from_metrics(exposure, process_mode, metrics)
+    if exposure.auto_normalize_contrast and metrics.get("shadow_point") is not None:
+        shown["shadow_density"] = exposure.shadow_density + auto_shadow_from_metrics(exposure, process_mode, metrics)
     return shown
 
 
@@ -75,4 +78,6 @@ def print_stored_value(
         return slope_to_grade(grade_to_slope(shown, lum_range), r_eff)
     if field == "highlight_density" and exposure.auto_normalize_contrast and metrics.get("highlight_point") is not None:
         return shown - auto_highlight_from_metrics(exposure, process_mode, metrics)
+    if field == "shadow_density" and exposure.auto_normalize_contrast and metrics.get("shadow_point") is not None:
+        return shown - auto_shadow_from_metrics(exposure, process_mode, metrics)
     return shown

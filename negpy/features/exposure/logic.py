@@ -469,6 +469,7 @@ def print_curve(
     highlight_grade_delta: Optional[float] = None,
     curvature: float = 0.0,
     highlight_density: Optional[float] = None,
+    shadow_density: Optional[float] = None,
 ) -> CharacteristicCurve:
     """The achromatic print curve for `exposure` at `slope`/`pivot`. Each None argument takes
     the grade-coupled, trim-free value; a per-layer trace passes its own. Single source of
@@ -494,7 +495,7 @@ def print_curve(
         paper=profile,
         midtone_gamma=effective_midtone_gamma(profile, exposure.midtone_gamma) if midtone_gamma is None else midtone_gamma,
         bpc=not exposure.paper_black,
-        shadow_density=exposure.shadow_density,
+        shadow_density=exposure.shadow_density if shadow_density is None else shadow_density,
         highlight_density=exposure.highlight_density if highlight_density is None else highlight_density,
         shadow_grade_delta=sg[0] if shadow_grade_delta is None else shadow_grade_delta,
         highlight_grade_delta=hg[0] if highlight_grade_delta is None else highlight_grade_delta,
@@ -1064,6 +1065,43 @@ def highlight_hold_offset(
     z_hi = float(c["anchor_target_density"]) + float(c["zone_density_highlight_offset"])
     w = 1.0 - _fast_sigmoid(float(c["zone_density_sharpness"]) * (v - z_hi))
     return float(min((v_hold - v) / max(w, 1e-6), float(c["highlight_hold_max"])))
+
+
+def shadow_hold_offset(
+    slope: float,
+    pivot: float,
+    shadow_point: float,
+    d_min: float = 0.0,
+    paper: Optional[PaperProfile] = None,
+) -> float:
+    """
+    Auto Grade's shadow lift, the shadow-side partner of highlight_hold_offset: a negative
+    shadow_density term, shadow_hold_strength of the straight-line run of the textured dark tail
+    past Shadow Reach's line plus shadow_hold_overshoot, capped at shadow_hold_max. The tail
+    normally prints past paper black, so it is a partial correction, not a landing. Never burns.
+    """
+    c = effective_constants(paper)
+    strength = float(c["shadow_hold_strength"])
+    if strength <= 0.0:
+        return 0.0
+    v = float(slope) * (float(shadow_point) - float(pivot))
+    v_start = _reference_linear_value(d_min, paper, target=float(c["shadow_reach_density"])) + float(c["shadow_hold_overshoot"])
+    if v <= v_start:
+        return 0.0
+    return -float(min(strength * (v - v_start), float(c["shadow_hold_max"])))
+
+
+def auto_shadow_from_metrics(exposure: Any, process_mode: Optional[str], metrics: Any) -> float:
+    """The shadow hold lift the render applied, re-derived from the published metrics."""
+    from negpy.features.exposure.papers import effective_paper_profile
+
+    point = metrics.get("shadow_point")
+    if not exposure.auto_normalize_contrast or point is None:
+        return 0.0
+    profile = effective_paper_profile(exposure.paper_profile, process_mode)
+    d_min = profile.d_min if exposure.paper_dmin else 0.0
+    slopes, pivots, _ = curve_params_from_metrics(exposure, process_mode, metrics)
+    return shadow_hold_offset(slopes[1], pivots[1], float(point), d_min=d_min, paper=profile)
 
 
 def auto_highlight_from_metrics(exposure: Any, process_mode: Optional[str], metrics: Any) -> float:

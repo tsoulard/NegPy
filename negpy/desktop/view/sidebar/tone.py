@@ -126,8 +126,8 @@ class ToneSidebar(BaseSidebar):
             conf.paper_dmin,
             "Paper White: simulate paper base density (Dmin 0.06) — whites print at ~0.93 instead of pure white, like a real print",
         )
-        self.shadow_density_slider = CompactSlider("Shadows Density", -0.9, 0.9, conf.shadow_density)
-        self.highlight_density_slider = CompactSlider("Highlights Density", -0.5, 0.5, conf.highlight_density)
+        self.shadow_density_slider = CompactSlider("Shadows Density", -1.0, 1.0, conf.shadow_density)
+        self.highlight_density_slider = CompactSlider("Highlights Density", -1.0, 1.0, conf.highlight_density)
         self.layout.addWidget(SliderGroup(self.shadow_density_slider, self.highlight_density_slider))
 
         grade_row = QVBoxLayout()
@@ -344,7 +344,6 @@ class ToneSidebar(BaseSidebar):
         for slider, field in (
             (self.toe_w_slider, "toe_width"),
             (self.sh_w_slider, "shoulder_width"),
-            (self.shadow_density_slider, "shadow_density"),
             (self.dye_separation_slider, "dye_separation"),
             (self.separation_damping_slider, "separation_damping"),
             (self.contrast_mask_slider, "contrast_mask"),
@@ -424,7 +423,12 @@ class ToneSidebar(BaseSidebar):
         )
 
     def _driven_sliders(self) -> dict:
-        return {"density": self.density_slider, "grade": self.grade_slider, "highlight_density": self.highlight_density_slider}
+        return {
+            "density": self.density_slider,
+            "grade": self.grade_slider,
+            "shadow_density": self.shadow_density_slider,
+            "highlight_density": self.highlight_density_slider,
+        }
 
     def _meters(self) -> dict:
         return self.state.auto_meters.get(self.state.current_file_hash or "", {})
@@ -550,7 +554,6 @@ class ToneSidebar(BaseSidebar):
             self._sync_driven()
             self.toe_w_slider.setValue(conf.toe_width)
             self.sh_w_slider.setValue(conf.shoulder_width)
-            self.shadow_density_slider.setValue(conf.shadow_density)
             self.dye_separation_slider.setValue(conf.dye_separation)
             self.separation_damping_slider.setValue(conf.separation_damping)
             self.contrast_mask_slider.setValue(conf.contrast_mask)
