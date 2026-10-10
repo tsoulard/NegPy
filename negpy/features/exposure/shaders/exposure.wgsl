@@ -51,15 +51,18 @@ struct ExposureUniforms {
     // Hue Trim: x = rotation in radians; yzw = preflash fraction (0 = off), threshold
     // value and paper gamma (preflash_params). Costs no slot; 288B already spanned two.
     hue: vec4<f32>,
-    // Contrast Mask: x = stops per unit of plane (contrast_mask_scale; 0 gates
-    // mask_tex off), yz = the printed frame's origin in rotated pixels, w pad.
+    // Contrast Mask: x = stops per unit of plane (contrast_mask_scale; 0 gates the
+    // mask off), yz = the printed frame's origin in rotated pixels, w = the Diffusion
+    // mix (0 gates it off).
     mask: vec4<f32>,
-    // Contrast Mask: xy = the printed frame's span in rotated pixels, zw pad.
+    // The printed frame's span in rotated pixels in xy, shared by both planes; zw pad.
     mask_span: vec4<f32>,
     // Tone-limited masks (limited_mask_params): stops, ISO-R delta, key edges e0/e1 each.
     keyed: array<vec4<f32>, 4>,
     // x = limited mask count, y = frame ISO-R, zw = the ISO-R ladder's ends.
     key_meta: vec4<f32>,
+    // Diffusion: xyz = each channel's log range (channel_density_ranges), w pad.
+    diff_range: vec4<f32>,
 };
 
 @group(0) @binding(0) var input_tex: texture_2d<f32>;
@@ -67,16 +70,17 @@ struct ExposureUniforms {
 @group(0) @binding(2) var<uniform> params: ExposureUniforms;
 // Per-pixel dodge/burn EV map, rasterised on the CPU (shared with the CPU path).
 @group(0) @binding(3) var ev_tex: texture_2d<f32>;
-// Contrast Mask plane on the analysis grid. Upscaled here rather than uploaded at
-// render size, so the slider costs a uniform write and no transfer.
+// The analysis-grid planes: r = the Contrast Mask plane, gba = the Diffusion plane's
+// channels. Upscaled here rather than uploaded at render size, so a slider costs a
+// uniform write and no transfer.
 @group(0) @binding(4) var mask_tex: texture_2d<f32>;
 // Shape alpha of each tone-limited mask, one per channel (planes 2+ of compute_local_maps).
 @group(0) @binding(5) var key_tex: texture_2d<f32>;
 
-// The mask plane at this pixel, in stops. Mirrors expand_mask_plane in
-// exposure/logic.py: OpenCV's half-pixel bilinear, taps clamped, which is the
-// edge replication outside the printed frame.
-fn contrast_mask_stops(coords: vec2<i32>) -> f32 {
+// The planes at this pixel. Mirrors plane_taps in exposure/logic.py: OpenCV's
+// half-pixel bilinear, taps clamped, which is the edge replication outside the
+// printed frame.
+fn plane_sample(coords: vec2<i32>) -> vec4<f32> {
     let dims = vec2<f32>(textureDimensions(mask_tex));
     let p = (vec2<f32>(coords) + vec2<f32>(0.5) - params.mask.yz) * dims / params.mask_span.xy - vec2<f32>(0.5);
     let lo = clamp(floor(p), vec2<f32>(0.0), dims - vec2<f32>(1.0));
@@ -84,9 +88,14 @@ fn contrast_mask_stops(coords: vec2<i32>) -> f32 {
     let f = clamp(p - lo, vec2<f32>(0.0), vec2<f32>(1.0));
     let i0 = vec2<i32>(lo);
     let i1 = vec2<i32>(hi);
-    let top = mix(textureLoad(mask_tex, vec2<i32>(i0.x, i0.y), 0).r, textureLoad(mask_tex, vec2<i32>(i1.x, i0.y), 0).r, f.x);
-    let bot = mix(textureLoad(mask_tex, vec2<i32>(i0.x, i1.y), 0).r, textureLoad(mask_tex, vec2<i32>(i1.x, i1.y), 0).r, f.x);
-    return params.mask.x * mix(top, bot, f.y);
+    let top = mix(textureLoad(mask_tex, vec2<i32>(i0.x, i0.y), 0), textureLoad(mask_tex, vec2<i32>(i1.x, i0.y), 0), f.x);
+    let bot = mix(textureLoad(mask_tex, vec2<i32>(i0.x, i1.y), 0), textureLoad(mask_tex, vec2<i32>(i1.x, i1.y), 0), f.x);
+    return mix(top, bot, f.y);
+}
+
+// The Contrast Mask plane at this pixel, in stops.
+fn contrast_mask_stops(coords: vec2<i32>) -> f32 {
+    return params.mask.x * plane_sample(coords).r;
 }
 
 fn fast_sigmoid(x: f32) -> f32 {
@@ -225,13 +234,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let d_max_eff = max(d_max_base, d_min_eff + vec3<f32>(0.1));
 
     // Dodge/burn print exposure (stops, positive = burn; same domain as cmy_offsets) in .r,
-    // the local grade's ISO-R deltas in .b, turned into a slope multiplier here as
-    // local_grade_factor_map does, so a Grade change re-uploads nothing.
+    // the masks' flash fraction in .g, the local grade's ISO-R deltas in .b, turned into a
+    // slope multiplier here as local_grade_factor_map does, so a Grade change re-uploads nothing.
     var ev = 0.0;
     var gfac = 1.0;
+    var flash = params.hue.y;
     if (params.ev_scale.w != 0.0) {
         let local_maps = textureLoad(ev_tex, coords, 0);
         ev = local_maps.r;
+        flash = flash + local_maps.g;
         var dr = local_maps.b;
         let n_key = i32(params.key_meta.x);
         if (n_key > 0) {
@@ -253,17 +264,30 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         ev = ev + contrast_mask_stops(coords);
     }
 
+    // Diffusion mixes light, not density: the paper sees (1-d)·I + d·blur(I), with
+    // I = 10^(val·r), r the channel's log range (diffusion_plane). Mirrors the CPU kernel.
+    var diffused = vec3<f32>(0.0);
+    if (params.mask.w > 0.0) {
+        diffused = plane_sample(coords).gba;
+    }
+
     var dens: vec3<f32>;
 
     for (var ch = 0; ch < 3; ch++) {
-        let val = color[ch] + params.cmy_offsets[ch] + ev * params.ev_scale[ch];
+        var base = color[ch];
+        if (params.mask.w > 0.0) {
+            let r = params.diff_range[ch];
+            base = log(mix(pow(10.0, base * r), pow(10.0, diffused[ch] * r), params.mask.w)) / (2.302585 * r);
+        }
+        let val = base + params.cmy_offsets[ch] + ev * params.ev_scale[ch];
         // Quadratic per-channel core (curvature 0 -> the original straight line).
         // gfac is the local grade: a slope rotation about this channel's pivot, so a
         // masked region's own midtone holds. Curvature stays global.
         var v = quadratic_core(params.slopes[ch] * gfac, params.pivots[ch], params.curvatures[ch], val);
-        // Preflash: the flash exposure adds to the image exposure (preflash_value).
-        if (params.hue.y > 0.0) {
-            v = params.hue.z + params.hue.w * log(pow(10.0, (v - params.hue.z) / params.hue.w) + params.hue.y) / 2.302585;
+        // Preflash, the frame's plus the masks': the flash exposure adds to the image
+        // exposure (preflash_value).
+        if (flash > 0.0) {
+            v = params.hue.z + params.hue.w * log(pow(10.0, (v - params.hue.z) / params.hue.w) + flash) / 2.302585;
         }
 
         // Variable-gamma paper S-curve: extra local gamma at the midtone centre

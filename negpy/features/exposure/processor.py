@@ -16,6 +16,7 @@ from negpy.features.exposure.logic import (
     grade_coupled_shape,
     split_grade_deltas,
     local_ev_scale,
+    channel_density_ranges,
     local_grade_factor_map,
     highlight_hold_offset,
     shadow_hold_offset,
@@ -325,10 +326,24 @@ class PhotometricProcessor:
         grade_map = None
         if local_maps is not None and local_maps[:, :, 1].any():
             grade_map = local_grade_factor_map(np.ascontiguousarray(local_maps[:, :, 1]), self.config.grade)
+        flash_map = None
+        if local_maps is not None and local_maps[:, :, 2].any():
+            flash_map = np.ascontiguousarray(local_maps[:, :, 2])
+        diff_kw: Dict[str, Any] = {}
+        diff_plane = context.metrics.get("diffusion_plane")
+        if self.config.diffusion > 0.0 and diff_plane is not None:
+            h, w = image.shape[:2]
+            y1, y2, x1, x2 = context.metrics.get("diffusion_roi") or (0, h, 0, w)
+            diff_kw = {
+                "diffusion": self.config.diffusion,
+                "diffusion_plane": diff_plane,
+                "diffusion_rect": (float(x1), float(y1), float(x2 - x1), float(y2 - y1)),
+                "diffusion_range": channel_density_ranges(final_bounds),
+            }
         key_kw: Dict[str, Any] = {}
-        if local_maps is not None and local_maps.shape[2] > 2 and self.local_config is not None:
+        if local_maps is not None and local_maps.shape[2] > 3 and self.local_config is not None:
             key_kw = {
-                "key_alpha": local_maps[:, :, 2:],
+                "key_alpha": local_maps[:, :, 3:],
                 "key_params": limited_mask_params(self.local_config, self.config, context.process_mode, context.metrics),
                 "grade_deltas": local_maps[:, :, 1],
             }
@@ -388,6 +403,8 @@ class PhotometricProcessor:
             separation_damping=0.0 if context.process_mode == ProcessMode.BW else self.config.separation_damping,
             frame_grade=self.config.grade,
             preflash=self.config.preflash,
+            flash_map=flash_map,
+            **diff_kw,
             **key_kw,
         )
 

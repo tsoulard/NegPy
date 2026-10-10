@@ -27,7 +27,7 @@ NegPy uses **Jinja2** for dynamic file naming in both the **Export** and **Scan*
 | `{{ lens }}` | Lens model (or make if model is empty). | `80mm f/4` |
 | `{{ lens_make }}` / `{{ lens_model }}` | Lens make / model separately. | |
 | `{{ focal_length }}` | Lens focal length in mm. | `80` |
-| `{{ film }}` | Film stock name. | `Portra 400` |
+| `{{ film }}` | Film stock name. | `Ektacolor Pro 400` |
 | `{{ film_iso }}` | Film ISO. | `400` |
 | `{{ film_manufacturer }}` | Film manufacturer. | `Kodak` |
 | `{{ film_color_type }}` | Film color type. | `Color negative` |

@@ -134,3 +134,15 @@ def rehome_paths(repo: Any, move: Callable[[str], str]) -> None:
         moved[move(primary)] = entry
     if moved != saved:
         repo.save_global_setting(COMPOSITES_KEY, moved)
+
+
+def frame_count(paths: Any, composites: Dict[str, dict], triplets: Dict[str, list]) -> int:
+    """How many frames ``paths`` open as: a remembered stitch, HDR merge or triplet whose
+    primary is among them is one frame. No file is hashed, so a part changed on disk
+    still counts as attached."""
+    files = set(paths)
+    parts = part_paths(entry for primary, entry in composites.items() if primary in files)
+    for red, record in triplets.items():
+        if red in files:
+            parts.update(record[:2])
+    return len(files - parts)

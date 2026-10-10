@@ -18,13 +18,22 @@ from negpy.features.exposure.processor import (
     PhotometricProcessor,
 )
 from negpy.features.exposure.logic import expand_mask_plane
-from negpy.features.exposure.normalization import contrast_mask_plane, effective_crosstalk_matrix, normalized_roi
+from negpy.features.exposure.normalization import (
+    contrast_mask_plane,
+    diffusion_grid,
+    diffusion_plane,
+    effective_crosstalk_matrix,
+    geometry_kwargs,
+    normalized_roi,
+)
 from negpy.features.process.hue import apply_hue_trim
+from negpy.features.process.models import ProcessMode
 from negpy.features.process.path import RenderPath, render_path
 from negpy.features.transparency.processor import TransferProcessor, TransparencyBaseProcessor
 from negpy.features.exposure.papers import effective_paper_profile
 from negpy.features.cyanotype.processor import CyanotypeProcessor
 from negpy.features.lith.processor import LithProcessor
+from negpy.features.sabattier.processor import SabattierProcessor
 from negpy.features.toning.processor import ToningProcessor
 from negpy.features.lab.logic import apply_clahe
 from negpy.features.lab.processor import PhotoLabProcessor
@@ -58,6 +67,7 @@ class DarkroomEngine:
         self.config = APP_CONFIG
         self.cache = PipelineCache()
         self._mask_plane: Optional[Tuple[Any, np.ndarray, float]] = None
+        self._diffusion_plane: Optional[Tuple[Tuple, np.ndarray]] = None
 
     def _run_stage(
         self,
@@ -104,6 +114,7 @@ class DarkroomEngine:
         if not context.cache_stages:
             self.cache.clear()
             self._mask_plane = None
+            self._diffusion_plane = None
         pipeline_changed = False
         if self.cache.source_hash != source_hash:
             self.cache.clear()
@@ -201,15 +212,9 @@ class DarkroomEngine:
                     img,
                     mask_bounds,
                     effective_crosstalk_matrix(settings.process, settings.process.process_mode),
-                    rotation=settings.geometry.rotation,
-                    fine_rotation=settings.geometry.fine_rotation,
-                    flip_horizontal=settings.geometry.flip_horizontal,
-                    flip_vertical=settings.geometry.flip_vertical,
-                    converge_v=settings.geometry.converge_v,
-                    converge_h=settings.geometry.converge_h,
-                    distortion_k1=distortion_k1,
                     roi_norm=normalized_roi(mask_roi, current_img.shape[:2]),
                     spacer=settings.exposure.mask_spacer,
+                    **geometry_kwargs(settings.geometry, distortion_k1),
                 )
                 # Expanded here, not in the exposure stage: the slider re-runs that stage,
                 # and only the scalar moves with it.
@@ -219,6 +224,41 @@ class DarkroomEngine:
                 context.metrics["contrast_mask_plane"] = self._mask_plane[1]
                 context.metrics["contrast_mask_centre"] = self._mask_plane[2]
                 context.metrics["contrast_mask_roi"] = None
+
+        # Same recipe as the mask plane, in the print's own normalization, so the kernel can
+        # mix it with the pixel as light. Print curve only: the transfer curve and the Flat
+        # master take no plane.
+        diff_bounds = context.metrics.get("final_bounds")
+        if (
+            settings.exposure.diffusion > 0.0
+            and diff_bounds is not None
+            and render_path(settings.process) is RenderPath.PRINT
+            and settings.exposure.render_intent != RenderIntent.FLAT
+        ):
+            diff_roi = context.active_roi
+            panchromatic = settings.process.process_mode == ProcessMode.BW
+            diff_key = (
+                source_hash,
+                calculate_config_hash(base_key),
+                diff_roi,
+                current_img.shape[:2],
+                panchromatic,
+            )
+            # A None plane (an unmetered frame) is cached under its key like any other.
+            cached = self._diffusion_plane
+            if cached is None or cached[0] != diff_key:
+                grid = diffusion_grid(
+                    img,
+                    effective_crosstalk_matrix(settings.process, settings.process.process_mode),
+                    roi_norm=normalized_roi(diff_roi, current_img.shape[:2]),
+                    **geometry_kwargs(settings.geometry, distortion_k1),
+                )
+                plane = diffusion_plane(grid, diff_bounds, panchromatic)
+                cached = (diff_key, plane)
+                self._diffusion_plane = cached
+            if cached[1] is not None:
+                context.metrics["diffusion_plane"] = cached[1]
+                context.metrics["diffusion_roi"] = diff_roi
 
         def run_exposure(img_in: ImageBuffer, ctx: PipelineContext) -> ImageBuffer:
             img_out = exposure_processor(settings).process(img_in, ctx)
@@ -265,6 +305,7 @@ class DarkroomEngine:
             lith_paper = effective_paper_profile(settings.exposure.paper_profile, settings.process.process_mode)
             current_img = LithProcessor(settings.altproc, lith_paper).process(current_img, context)
             current_img = CyanotypeProcessor(settings.altproc).process(current_img, context)
+            current_img = SabattierProcessor(settings.altproc, lith_paper).process(current_img, context)
 
             current_img = ToningProcessor(settings.toning, settings.altproc.alt_process).process(current_img, context)
 

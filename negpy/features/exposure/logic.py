@@ -87,6 +87,23 @@ def separation_damping_gain_np(k: float, damping: float, chroma: Any, ref_spread
 
 
 @njit(inline="always")
+def plane_taps(gh: int, gw: int, x: int, y: int, rect_x: float, rect_y: float, rect_w: float, rect_h: float):
+    """Where render pixel (x, y) falls on a gh×gw analysis-grid plane that covers the printed
+    frame `rect` in render pixels: the four tap indices and the two blend weights of
+    OpenCV's half-pixel bilinear, taps clamped, which is the edge replication outside the
+    frame. exposure.wgsl mirrors it."""
+    px = (x + 0.5 - rect_x) * gw / rect_w - 0.5
+    py = (y + 0.5 - rect_y) * gh / rect_h - 0.5
+    lx = min(max(np.floor(px), 0.0), gw - 1.0)
+    ly = min(max(np.floor(py), 0.0), gh - 1.0)
+    hx = min(lx + 1.0, gw - 1.0)
+    hy = min(ly + 1.0, gh - 1.0)
+    fx = min(max(px - lx, 0.0), 1.0)
+    fy = min(max(py - ly, 0.0), 1.0)
+    return int(lx), int(hx), int(ly), int(hy), fx, fy
+
+
+@njit(inline="always")
 def tone_key_weight(lum: float, e0: float, e1: float) -> float:
     """A tone-limited mask's weight at luma `lum`: a smoothstep from 0 at e0 to 1 at e1
     (see placement.key_edges). Either edge order works. exposure.wgsl mirrors it."""
@@ -167,6 +184,13 @@ def _apply_print_curve_kernel(
     flash: float,
     flash_v: float,
     flash_gamma: float,
+    flash_map: np.ndarray,
+    use_flash: bool,
+    diff_plane: np.ndarray,
+    diff_rect: np.ndarray,
+    diff_mix: float,
+    diff_range: np.ndarray,
+    use_diff: bool,
     bpc: bool = False,
 ) -> np.ndarray:
     """
@@ -271,8 +295,27 @@ def _apply_print_curve_kernel(
                 gfac = r0 / r1
             elif use_grade:
                 gfac = grade_map[y, x]
+            # The frame's preflash plus the masks' own, pre-summed like the stops.
+            fl = flash
+            if use_flash:
+                fl = fl + flash_map[y, x]
+            i0x = i1x = i0y = i1y = 0
+            fx = fy = 0.0
+            if use_diff:
+                i0x, i1x, i0y, i1y, fx, fy = plane_taps(
+                    diff_plane.shape[0], diff_plane.shape[1], x, y, diff_rect[0], diff_rect[1], diff_rect[2], diff_rect[3]
+                )
             for ch in range(3):
-                val = img[y, x, ch] + cmy_offsets[ch]
+                base = img[y, x, ch]
+                if use_diff:
+                    # Diffusion mixes light, not density: the paper sees (1-d)·I + d·blur(I),
+                    # with I = 10^(val·r), r the channel's log range (diffusion_plane).
+                    r = diff_range[ch]
+                    top = diff_plane[i0y, i0x, ch] * (1.0 - fx) + diff_plane[i0y, i1x, ch] * fx
+                    bot = diff_plane[i1y, i0x, ch] * (1.0 - fx) + diff_plane[i1y, i1x, ch] * fx
+                    p = top * (1.0 - fy) + bot * fy
+                    base = np.log10((1.0 - diff_mix) * 10.0 ** (base * r) + diff_mix * 10.0 ** (p * r)) / r
+                val = base + cmy_offsets[ch]
                 if use_key:
                     val = val + np.float32(ev_px * ev_scale[ch])
                 elif use_ev:
@@ -281,8 +324,8 @@ def _apply_print_curve_kernel(
                 # gfac is the local grade, a slope rotation about this channel's pivot, so the
                 # region's own midtone holds. The cast-removal curvature stays global.
                 v = quadratic_core(slopes[ch] * gfac, pivots[ch], curvatures[ch], val)
-                if flash > 0.0:
-                    v = flash_v + flash_gamma * np.log10(10.0 ** ((v - flash_v) / flash_gamma) + flash)
+                if fl > 0.0:
+                    v = flash_v + flash_gamma * np.log10(10.0 ** ((v - flash_v) / flash_gamma) + fl)
 
                 # Variable-gamma paper S-curve: extra local gamma at the midtone centre
                 # (v_star), easing to zero toward the toe and shoulder. Centred on v_star, so
@@ -651,6 +694,11 @@ def apply_characteristic_curve(
     grade_deltas: Optional[np.ndarray] = None,
     frame_grade: float = 115.0,
     preflash: float = 0.0,
+    flash_map: Optional[np.ndarray] = None,
+    diffusion: float = 0.0,
+    diffusion_plane: Optional[np.ndarray] = None,
+    diffusion_rect: Optional[Tuple[float, float, float, float]] = None,
+    diffusion_range: Tuple[float, float, float] = (1.0, 1.0, 1.0),
 ) -> ImageBuffer:
     """Applies the asymmetric H&D print curve per channel in log-density space.
 
@@ -692,6 +740,12 @@ def apply_characteristic_curve(
     ev_arr = np.ascontiguousarray(ev_map.astype(np.float32)) if ev_map is not None else np.zeros((1, 1), dtype=np.float32)
     use_grade = grade_map is not None
     grade_arr = np.ascontiguousarray(grade_map.astype(np.float32)) if grade_map is not None else np.ones((1, 1), dtype=np.float32)
+    use_flash = flash_map is not None
+    flash_arr = np.ascontiguousarray(flash_map.astype(np.float32)) if flash_map is not None else np.zeros((1, 1), dtype=np.float32)
+    use_diff = diffusion > 0.0 and diffusion_plane is not None
+    diff_arr = np.ascontiguousarray(diffusion_plane.astype(np.float32)) if use_diff else np.zeros((1, 1, 3), dtype=np.float32)
+    h_img, w_img = img.shape[:2]
+    rect = diffusion_rect if diffusion_rect is not None else (0.0, 0.0, float(w_img), float(h_img))
     use_key = key_alpha is not None
     r_min, r_max = float(c["iso_r_min"]), float(c["iso_r_max"])
     if use_key:
@@ -757,6 +811,13 @@ def apply_characteristic_curve(
         flash=max(float(preflash), 0.0),
         flash_v=flash_v,
         flash_gamma=flash_gamma,
+        flash_map=flash_arr,
+        use_flash=use_flash,
+        diff_plane=diff_arr,
+        diff_rect=np.array(rect, dtype=np.float64),
+        diff_mix=diffusion_mix(diffusion),
+        diff_range=np.array(diffusion_range, dtype=np.float64),
+        use_diff=use_diff,
         bpc=bool(bpc),
     )
     return ensure_image(res)
@@ -1406,6 +1467,24 @@ def filtration_offsets(wb_cmy: Tuple[float, float, float], bounds: Any) -> Tuple
             d = d / max(abs(bounds.ceils[ch] - bounds.floors[ch]), 1e-6)
         out.append(d)
     return (out[0], out[1], out[2])
+
+
+def channel_density_ranges(bounds: Any) -> Tuple[float, float, float]:
+    """Each channel's stretch range in log10 units: one normalized unit of val is this much
+    density. Range 1 when bounds are None."""
+    if bounds is None:
+        return (1.0, 1.0, 1.0)
+    out = [max(abs(bounds.ceils[ch] - bounds.floors[ch]), 1e-6) for ch in range(3)]
+    return (out[0], out[1], out[2])
+
+
+# A real diffuser passes much of the light unscattered, so the slider's top is half the light.
+DIFFUSION_MIX_MAX = 0.5
+
+
+def diffusion_mix(diffusion: float) -> float:
+    """The fraction of blurred light the paper sees at a Diffusion slider value."""
+    return DIFFUSION_MIX_MAX * min(max(float(diffusion), 0.0), 1.0)
 
 
 def local_ev_scale(bounds: Any) -> Tuple[float, float, float]:

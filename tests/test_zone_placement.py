@@ -578,14 +578,65 @@ class TestZoneStripArming(unittest.TestCase):
             )
         )
 
+    def _settle(self, strip):
+        # A click reports once the double-click interval has passed with no second click.
+        strip._click_timer.stop()
+        strip._fire_click()
+
+    def _double_click(self, strip, x: float):
+        from PyQt6.QtCore import QEvent, QPointF, Qt
+        from PyQt6.QtGui import QMouseEvent
+
+        strip.mouseDoubleClickEvent(
+            QMouseEvent(
+                QEvent.Type.MouseButtonDblClick,
+                QPointF(x, 12.0),
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+
     def test_a_cell_click_reports_its_zone(self):
         strip = self._strip()
         zones: list = []
         strip.zone_clicked.connect(zones.append)
-        self._click(strip, 5.0)  # cell 0
-        self._click(strip, 55.0)  # cell V
-        self._click(strip, 99.0)  # cell IX
+        for n, x in enumerate((5.0, 55.0, 99.0)):  # cells 0, V, IX
+            self._click(strip, x)
+            self.assertEqual(len(zones), n)  # nothing yet: the double-click interval is still running
+            self._settle(strip)
         self.assertEqual(zones, [0, 5, 9])
+
+    def test_a_double_click_toggles_the_overlay_and_arms_nothing(self):
+        strip = self._strip()
+        zones: list = []
+        toggles: list = []
+        strip.zone_clicked.connect(zones.append)
+        strip.zone_double_clicked.connect(lambda: toggles.append(True))
+        self._click(strip, 55.0)  # the first click of the pair
+        self._double_click(strip, 55.0)
+        self._settle(strip)
+        self.assertEqual(toggles, [True])
+        self.assertEqual(zones, [])
+
+    def test_the_strip_says_placement_is_off_on_a_slide(self):
+        from PyQt6.QtCore import QEvent, QPointF, Qt
+        from PyQt6.QtGui import QMouseEvent
+
+        strip = self._strip()
+        strip.set_overlay_hint("Double-click: Zone Overlay on or off")
+        move = QMouseEvent(
+            QEvent.Type.MouseMove, QPointF(55.0, 12.0), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier
+        )
+        strip.mouseMoveEvent(move)
+        self.assertIn("click to place a tone here", strip.toolTip())
+        self.assertIn("Double-click: Zone Overlay", strip.toolTip())
+        self.assertEqual(strip.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+        strip.set_placement_enabled(False)
+        strip.mouseMoveEvent(move)
+        self.assertIn("<b>Disabled for Slides/Reversal Film</b>", strip.toolTip())
+        self.assertNotIn("click to place", strip.toolTip())
+        self.assertNotEqual(strip.cursor().shape(), Qt.CursorShape.PointingHandCursor)
 
     def test_the_armed_cell_is_remembered_for_the_repaint(self):
         strip = self._strip()

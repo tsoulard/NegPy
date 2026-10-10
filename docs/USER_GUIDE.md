@@ -62,7 +62,7 @@ A peek shows a **NEGATIVE**, **EMBEDDED** or **FLAT SCAN** badge. `Esc` closes a
 |-----|--------|---------------|
 | **Geometry** | Geometry | Crop, straighten, easel movements |
 | **Exposure** | Filtration · Tone · Dodge & Burn | White balance, density, contrast, curve, local burns |
-| **Look** | Lab · Alternative Processes · Toning | Chroma, sharpening, lith, cyanotype, toning |
+| **Look** | Lab · Alternative Processes · Toning | Chroma, sharpening, lith, cyanotype, Sabattier, toning |
 | **Finish** | Retouch · Finishing | Dust, vignette, border, carrier |
 | **Favorites** | Your chosen sliders · Presets | Most-used controls, saved edits |
 | **History** | Work prints · Edit history | Named versions, undo trail |
@@ -129,7 +129,7 @@ Below it are the toolbar, the search box and two sections: **Library** (imported
 *   **Discovery Filters…**: folder names that importing and **↻** skip, with everything inside them, one per line (default `export`). A line matches any part of a name, ignoring case; a line with `*` must match the whole name (`raw_*`). Saving runs **↻**: rolls a filter now catches leave the list, and come back when the filter goes.
 *   **Sort**: Name or Date, ascending or descending.
 
-Each row shows name and count ("36 photos"); a roll whose folder is gone shows **folder missing** in amber. Importing only records the folder; nothing is decoded until you open the roll.
+Each row shows name and count ("36 photos"), where an assembled Trichrome triplet, stitch or HDR merge is one photo; a roll whose folder is gone shows **folder missing** in amber. Importing only records the folder; nothing is decoded until you open the roll.
 
 #### Importing
 
@@ -182,7 +182,7 @@ The Film Strip button row:
 *   **Sort** (arrows): Name or Date, or **Scene** once the loaded roll has one ([Scenes](#scenes)), ascending or descending.
 *   **Sheet filter** (funnel): *All Frames*, *Keepers Only*, *Hide Rejected* or *Unmarked Only*. **Advance After Marking** in the same menu moves to the next frame after a Keeper or Reject mark. `Home` and `End` jump to the first and last frame.
 
-Above both sections sit the **filter box**, a **`.*`** regex toggle, a **search-library** button and, once enabled in Preferences, a **search-by-meaning** toggle. The Film Strip has a **tally** ("Portra 400 — 36 frames · 12 keepers · 3 rejected", or **Collection** for frames that are not one roll) and a **thumbnail size** slider. With a filter active the tally names it; if it hides everything, **Show all frames** clears it.
+Above both sections sit the **filter box**, a **`.*`** regex toggle, a **search-library** button and, once enabled in Preferences, a **search-by-meaning** toggle. The Film Strip has a **tally** ("Ektacolor Pro 400 — 36 frames · 12 keepers · 3 rejected", or **Collection** for frames that are not one roll) and a **thumbnail size** slider. With a filter active the tally names it; if it hides everything, **Show all frames** clears it.
 
 Right-click empty space for **Add Files**, **Add Folder** and **Close Roll…**. Buttons that do not fit move into a **»** menu.
 
@@ -333,7 +333,9 @@ A 21-step gray wedge printed through the current curve. Patches that merge into 
 
 Ten cells on the Adams scale (**0** paper black, **V** 18% mid-gray); opacity shows how much of the frame lands in each. The end cells turn **red** when shadows block up or highlights blow.
 
-Click a cell, then a spot on the photo, to place that tone (see Zone placement); Esc cancels.
+Click a cell, then a spot on the photo, to place that tone (see Zone placement); Esc cancels. On a slide or a Positive frame the strip reads **Disabled for Slides/Reversal Film**.
+
+Double-click the strip to turn the canvas **Zone Overlay** on or off (also `Shift+Z` and the canvas toolbar's grid icon): every region of the print is outlined and labeled with its zone.
 
 #### Probe
 
@@ -396,7 +398,7 @@ Scanning-lens distortion, chromatic aberration and flat field are in **Optics** 
 
 ## 5. Exposure tab
 
-Three panels set light, color and contrast in the print stage of the pipeline.
+Four panels set light, color and contrast in the print stage of the pipeline.
 
 <!-- panel:color -->
 ### 5.1 Filtration: white balance
@@ -411,9 +413,9 @@ Color timing, like enlarger dichroic filters. The **Global / Shadows / Highlight
 **Cast Removal** is on the Roll tab's Calibration card ([§10.3](#103-calibration-what-your-rig-does-to-the-colors)).
 
 <!-- panel:tone -->
-### 5.2 Tone: density, contrast and the print curve
+### 5.2 Tone: density and contrast
 
-**Global / R / G / B** applies most controls to the shared curve, or as per-dye-layer trims for **crossover correction** (casts that differ between shadows and highlights).
+**Global / R / G / B** applies Grade and Split Grade to the shared curve, or as per-dye-layer trims for **crossover correction** (casts that differ between shadows and highlights).
 
 **Automatic helpers**, in the **Auto** menu (magic-wand icon) beside the channel selector, on by default:
 
@@ -436,24 +438,28 @@ Color timing, like enlarger dichroic filters. The **Global / Shadows / Highlight
 *   **Shadows Density** / **Highlights Density** (±1.0 ΔD): brighten or darken only the shadows or highlights, within paper black and white. With Auto Grade on, each shows its automatic share (Shadow Hold's lift, Highlight Hold's burn). They also work on slides.
 *   **Shadows Grade** / **Highlights Grade** (split grade, ±50 ISO-R): local contrast in the deep shadows or highlights.
 *   **Preflash** (0 to 1): an even flash over the sheet, as a fraction of the paper's threshold exposure. It pulls highlight detail off paper white and softens the print slightly; bare paper stays white. Hidden on slides.
+*   **Diffusion** (0 to 1, hidden in Transparency): a diffuser under the enlarger lens, a Softar or a stocking. The value is how much light it scatters: a stronger diffuser, or more of the exposure given through it. Shadows bleed into highlights and edges soften; flat areas print as before. Grays out in R/G/B mode.
 *   **Contrast Mask** (±0.5, hidden in Transparency): a blurred mask sandwiched with the negative; the value is its signed gamma. Positive compresses the range by (1 − gamma) so a harder grade fits, keeping fine detail. Negative expands the range by (1 + gamma) for a negative too flat for Grade; past about −0.4, highlights clip. Past about ±0.2, strong edges get a halo.
 *   **Mask Spacer** (2 to 6%, default 4%): the gap between mask and negative, as percent of the frame. Thicker masks only broad masses; thinner reaches into detail and hazes shadows next to bright areas. Both mask controls gray out in R/G/B mode.
 
-**Paper Response**:
+<!-- panel:paper -->
+### 5.3 Paper Response: the print curve
 
-*   **Paper profile**: a bundled paper (RA4 in Color Negative, B&W papers in B&W Negative) that sets the curve; the other controls trim on top. *Neutral* gives the defaults. Each B&W paper has its own lith color (§6.2).
+The paper's characteristic curve, drawn faintly behind the card header. Its own **Global / R / G / B** selector applies the curve controls to all layers or as per-dye-layer trims.
+
+*   **Paper**: a bundled paper (RA4 in Color Negative, B&W papers in B&W Negative) that sets the curve; the other controls trim on top. *Neutral* gives the defaults. Each B&W paper has its own lith color (§6.2).
 *   **Dye Separation** (0.5 to 1.5, hidden in B&W Negative): saturation in density space, through the paper's dyes, so it eases off at toe and shoulder. 1.0 is off; below pulls toward neutral. **Chroma** (Look tab) scales color evenly instead.
     *   **Separation Damping** (0 to 1): higher keeps the push on muted color and eases it on saturated color; below 1.0 separation, pastels go gray first. Grayed out at Dye Separation 1.0.
-*   **Paper White** (page icon, on the PAPER RESPONSE header): simulate paper base density, so whites print at about 0.93.
-*   **Paper Black** (circle icon, on the PAPER RESPONSE header): show the paper's slightly milky Dmax. Off (default) applies black-point compensation.
+*   **Paper White** (page icon, right of the channel selector): simulate paper base density, so whites print at about 0.93.
+*   **Paper Black** (circle icon, right of the channel selector): show the paper's slightly milky Dmax. Off (default) applies black-point compensation.
 *   **Snap** (-0.5 to 0.5): midtone gamma; paper white and black stay put.
 *   **Toe** (-1 to 1) + **Toe Width** (0.1 to 5): shadow roll-off. Positive lifts shadows; negative deepens them and, with Paper Black off, reaches exact black. Width sets how far the knee reaches.
 *   **Shoulder** (-1 to 1) + **Shoulder Width** (0.1 to 5): highlight roll-off. Positive compresses highlights; negative extends them and can clip.
 
-In R/G/B mode these become per-layer trims: **Grade** (±30 ISO-R), **Toe** / **Shoulder** (±1), **Toe Width** / **Shoulder Width** (±2), **Snap** (±0.5), **Dye Separation** (±0.4).
+In R/G/B mode these become per-layer trims: **Toe** / **Shoulder** (±1), **Toe Width** / **Shoulder Width** (±2), **Snap** (±0.5), **Dye Separation** (±0.4).
 
 <!-- panel:local -->
-### 5.3 Dodge & Burn: local exposure
+### 5.4 Dodge & Burn: local exposure
 
 Draw masks and lighten or darken only those areas. On a **Slide** the panel grays out, because the slide's transfer curve takes no masks; the frame keeps them. The **MASKS** header shows how many the frame has:
 
@@ -463,12 +469,13 @@ Draw masks and lighten or darken only those areas. On a **Slide** the panel gray
 
 Handles can go into the gray area outside the frame. A tilted Card Edge usually must start past the corner it burns.
 
-*   **Mask list**: shape icon, Dodge, Burn or Grade, and values. The shape icon enables or disables the mask; the yin-yang inverts it (it acts outside its shape); the eye toggles the outline (shown only on the Exposure tab); the trash deletes it.
-*   The canvas tint of the current mask, and of masks that intersect it, hides while you drag **Burn**, **Feather**, **Grade** or a vertex.
+*   **Mask list**: shape icon, Dodge, Burn, Grade or Flash, and values. The shape icon enables or disables the mask; the yin-yang inverts it (it acts outside its shape); the eye toggles the outline (shown only on the Exposure tab); the trash deletes it.
+*   The canvas tint of the current mask, and of masks that intersect it, hides while you drag **Burn**, **Feather**, **Grade**, **Flash** or a vertex.
 *   **SELECTED MASK**: the controls below act on the mask selected in the list, and gray out with none selected.
 *   **Burn** (-2 to 2 stops, default 0): **positive burns** (darker), **negative dodges** (brighter), like Print Density and the Finishing edge burn.
 *   **Feather** (0.0 to 0.15): edge softness, as a fraction of the frame's short side.
 *   **Grade** (-40 to 40 R): the mask's own contrast, in ISO-R points off the frame's Grade, negative harder (burn a sky at −20 R). It pivots on the region's midtone; overlapping grades add, within R50…R180.
+*   **Flash** (0 to 1, default 0): pre-exposes the paper under the mask, as a fraction of the threshold exposure like the Tone card's Preflash: the region's highlights compress without the density a burn adds (flash a sky through a card). Overlapping flashes add. Off on a tone-limited mask.
 *   **Tone Limit** (*All*, *Highlights*, *Shadows*) with **Tone Zone** (0 to 10, in thirds, default 6) and **Tone Softness** (⅓ to 3 zones): limits the mask to tones lighter or darker than a print zone, so a sky burn on *Highlights* at VI stops at the skyline. The tint shows the tones it selects. Up to four tone-limited masks per frame.
 
 **Printing Notes** (Export tab, or **Shift+N**) makes a marked-up work print: each mask outlined with its number and value in stops, and a corner card with the paper, exposure, grade, filtration, curve and dodge/burn list.
@@ -510,7 +517,7 @@ What a lab scanner (Frontier or Noritsu) does automatically.
 <!-- panel:altproc -->
 ### 6.2 Alternative Processes
 
-Pick **None / Lith / Cyanotype**; only that process's controls show. B&W Negative only, off by default.
+Pick **None / Lith / Cyanotype / Sabattier**; only that process's controls show. B&W Negative only, off by default.
 
 #### Lith
 
@@ -529,6 +536,14 @@ UV contact print on iron-salt paper: Prussian blue instead of black, with green 
 *   **Exposure Scale** (0.8 to 2.8 log D, default 1.4): the printable density range, the contrast control; shorter is more contrasty. Traditional cyanotype is about 1.0 to 1.2, Ware's new about 2.4.
 *   **Bleach** (0.0 to 0.5, default 0): washing soda; removes blue, highlights first.
 *   **Tannin** (0.0 to 0.5, default 0): tea, coffee or tannic acid; turns bleached iron brown and a little deeper. Bleach first for full brown; Tannin alone for split blue-brown.
+
+#### Sabattier
+
+The print is flashed with white light part-way through development: the light tones reverse and fold back toward gray, the dense ones hold, and a light Mackie line runs along every edge between dark and light. The print stays neutral silver, so every toner works on it.
+
+*   **Strength** (0 to 2, default 1.3): the second exposure's length. Below 1 the light tones flatten toward the fold; above 1 they reverse, the lighter the darker.
+*   **Re-exposure** (0.1 to 0.9, default 0.45): where the fold sits, as a fraction of the paper's Dmax. Tones denser than it hold.
+*   **Agitation** (0 to 1, default 0.7): rocking the tray after the flash. In a still bath (0) the shadows' bromide creeps into the light tones and draws wide Mackie lines; constant agitation (1) washes it away and draws none.
 
 ---
 

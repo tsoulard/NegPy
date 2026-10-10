@@ -1,6 +1,6 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import Any, Dict, Optional, TYPE_CHECKING, Tuple
 
 import cv2
 import numpy as np
@@ -22,6 +22,9 @@ _BLOCK_MEDIAN_PARALLEL_MIN_PIXELS = 2_000_000
 MASK_SPACER_DEFAULT = 4.0
 MASK_SPACER_MIN = 2.0
 MASK_SPACER_MAX = 6.0
+# Diffusion's blur sigma in per-cent of the printed frame's short side: one diffuser at the
+# lens, whose spread a printer does not vary between prints.
+DIFFUSION_SPREAD = 2.0
 
 
 @njit(cache=True, fastmath=True)
@@ -657,10 +660,22 @@ def normalized_roi(roi: Optional[Tuple[int, int, int, int]], shape: Tuple[int, i
     return (y1 / float(h), y2 / float(h), x1 / float(w), x2 / float(w))
 
 
-def contrast_mask_plane(
+def geometry_kwargs(geometry: Any, distortion_k1: float) -> Dict[str, Any]:
+    """The geometry an analysis-grid plane replays, as `analysis_grid`'s keyword arguments,
+    so every plane on both engines replays the same fields."""
+    return {
+        "rotation": geometry.rotation,
+        "fine_rotation": geometry.fine_rotation,
+        "flip_horizontal": geometry.flip_horizontal,
+        "flip_vertical": geometry.flip_vertical,
+        "distortion_k1": distortion_k1,
+        "converge_v": geometry.converge_v,
+        "converge_h": geometry.converge_h,
+    }
+
+
+def analysis_grid(
     image: ImageBuffer,
-    bounds: LogNegativeBounds,
-    unmix: Optional[np.ndarray],
     rotation: int = 0,
     fine_rotation: float = 0.0,
     flip_horizontal: bool = False,
@@ -669,18 +684,14 @@ def contrast_mask_plane(
     converge_v: float = 0.0,
     converge_h: float = 0.0,
     roi_norm: Optional[Tuple[float, float, float, float]] = None,
-    spacer: float = MASK_SPACER_DEFAULT,
-) -> Tuple[np.ndarray, float]:
+) -> np.ndarray:
     """
-    The blurred low-gamma plane an unsharp mask is built from, zero-mean, on the analysis
-    grid, plus the val it was centred on. The gamma's sign picks the mask's polarity and
-    so the direction; the centre is the val a flat area rotates about, which the Analysis
-    chart needs to draw the mask's band.
+    The linear frame on the analysis grid with its geometry replayed and cropped to the
+    printed frame, the array the Contrast Mask and Diffusion planes are blurred from.
 
-    Takes the linear frame *before* geometry and replays it on the downsampled copy, so
-    both engines call this on the same array. `roi_norm` is the printed frame as
+    Takes the frame *before* geometry and replays it on the downsampled copy, so both
+    engines call this on the same array. `roi_norm` is the printed frame as
     (y1, y2, x1, x2) fractions: a rebate or surround blurred in prints as a vignette.
-    `spacer` is per-cent of the grid: the scale above which tones are masked.
     """
     from negpy.features.exposure.models import EXPOSURE_CONSTANTS
     from negpy.features.geometry.logic import apply_fine_rotation, apply_keystone, apply_radial_distortion
@@ -711,6 +722,31 @@ def contrast_mask_plane(
         x1 = max(0, min(gw - 1, int(round(roi_norm[2] * gw))))
         x2 = max(x1 + 1, min(gw, int(round(roi_norm[3] * gw))))
         image = np.ascontiguousarray(image[y1:y2, x1:x2])
+    return image
+
+
+def contrast_mask_plane(
+    image: ImageBuffer,
+    bounds: LogNegativeBounds,
+    unmix: Optional[np.ndarray],
+    rotation: int = 0,
+    fine_rotation: float = 0.0,
+    flip_horizontal: bool = False,
+    flip_vertical: bool = False,
+    distortion_k1: float = 0.0,
+    converge_v: float = 0.0,
+    converge_h: float = 0.0,
+    roi_norm: Optional[Tuple[float, float, float, float]] = None,
+    spacer: float = MASK_SPACER_DEFAULT,
+) -> Tuple[np.ndarray, float]:
+    """
+    The blurred low-gamma plane an unsharp mask is built from, zero-mean, on the analysis
+    grid (`analysis_grid`), plus the val it was centred on. The gamma's sign picks the
+    mask's polarity and so the direction; the centre is the val a flat area rotates about,
+    which the Analysis chart needs to draw the mask's band. `spacer` is per-cent of the
+    grid: the scale above which tones are masked.
+    """
+    image = analysis_grid(image, rotation, fine_rotation, flip_horizontal, flip_vertical, distortion_k1, converge_v, converge_h, roi_norm)
 
     # A frame that never metered normalizes to huge values; no stretch, no mask.
     if luminance_density_range(bounds) < 1e-6:
@@ -722,6 +758,44 @@ def contrast_mask_plane(
     blurred = cv2.GaussianBlur(np.ascontiguousarray(lum, dtype=np.float32), (0, 0), sigma, borderType=cv2.BORDER_REPLICATE)
     centre = float(blurred.mean())
     return blurred - centre, centre
+
+
+def diffusion_grid(
+    image: ImageBuffer,
+    unmix: Optional[np.ndarray],
+    rotation: int = 0,
+    fine_rotation: float = 0.0,
+    flip_horizontal: bool = False,
+    flip_vertical: bool = False,
+    distortion_k1: float = 0.0,
+    converge_v: float = 0.0,
+    converge_h: float = 0.0,
+    roi_norm: Optional[Tuple[float, float, float, float]] = None,
+) -> np.ndarray:
+    """
+    The light the paper sees through a diffuser, as log density on the analysis grid
+    (`analysis_grid`): the unmixed light, blurred. The print's normalization is a per-channel
+    gain on that light, so the grid takes no bounds. The blur is `DIFFUSION_SPREAD`.
+    """
+    image = analysis_grid(image, rotation, fine_rotation, flip_horizontal, flip_vertical, distortion_k1, converge_v, converge_h, roi_norm)
+    light = np.ascontiguousarray(10.0 ** unmix_log_image(prefilter_log_grid(image, None, 0.0), unmix), dtype=np.float32)
+    sigma = DIFFUSION_SPREAD * 0.01 * min(light.shape[:2])
+    return np.log10(cv2.GaussianBlur(light, (0, 0), sigma, borderType=cv2.BORDER_REPLICATE))
+
+
+def diffusion_plane(grid: np.ndarray, bounds: LogNegativeBounds, panchromatic: bool = False) -> Optional[np.ndarray]:
+    """
+    `diffusion_grid` in the print's own normalization, so the print kernel can mix it with
+    the pixel as light. `panchromatic` collapses the plane to luma, as a B&W print collapses
+    the pixel it is mixed with. None when the frame never metered.
+    """
+    if luminance_density_range(bounds) < 1e-6:
+        return None
+    val = normalize_log_image(grid, bounds)
+    if panchromatic:
+        lum = LUMA_R * val[:, :, 0] + LUMA_G * val[:, :, 1] + LUMA_B * val[:, :, 2]
+        val = np.dstack([lum, lum, lum])
+    return np.ascontiguousarray(val, dtype=np.float32)
 
 
 def normalize_log_image(img_log: ImageBuffer, bounds: LogNegativeBounds) -> ImageBuffer:

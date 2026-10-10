@@ -1,7 +1,7 @@
 from typing import Any
 
 import numpy as np
-from PyQt6.QtCore import QPointF, QRect, Qt, pyqtSignal
+from PyQt6.QtCore import QPointF, QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QBrush,
     QColor,
@@ -11,8 +11,9 @@ from PyQt6.QtGui import (
     QPainterPath,
     QPen,
 )
-from PyQt6.QtWidgets import QSizePolicy, QWidget
+from PyQt6.QtWidgets import QApplication, QSizePolicy, QWidget
 
+from negpy.desktop.view.styles.templates import wrap_tooltip
 from negpy.desktop.view.styles.theme import THEME
 
 
@@ -352,6 +353,10 @@ class PhotometricCurveWidget(QWidget):
         self._pivot_pt = self._curve_pts[idx]
 
         self.update()
+
+    def curves(self) -> tuple[list[tuple[float, float]], list[list[tuple[float, float]]]]:
+        """The plotted base curve and the R, G, B traces (empty unless they diverge)."""
+        return self._curve_pts, [pts for _color, pts in self._channel_curves]
 
     # ── painting ─────────────────────────────────────────────────────────────
 
@@ -745,10 +750,12 @@ class ZoneStripWidget(QWidget):
     tint red on blocked shadows / blown highlights.
 
     Also the zone-placement control: clicking a cell asks for that zone, and the
-    next click on the photo places a tone there.
+    next click on the photo places a tone there. A double-click toggles the canvas
+    Zone Overlay instead, so a single click waits out the double-click interval.
     """
 
     zone_clicked = pyqtSignal(int)
+    zone_double_clicked = pyqtSignal()
 
     _LABELS = ("0", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX")
 
@@ -760,6 +767,23 @@ class ZoneStripWidget(QWidget):
         self._occ: np.ndarray | None = None
         self._warn: tuple[bool, bool] = (False, False)
         self._armed: int | None = None
+        self._placement_enabled = True
+        self._overlay_hint = ""
+        self._pending: int | None = None
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.setInterval(QApplication.doubleClickInterval())
+        self._click_timer.timeout.connect(self._fire_click)
+
+    def set_placement_enabled(self, enabled: bool) -> None:
+        """Zone placement works on the print curve only; a slide or a Positive frame says so."""
+        self._placement_enabled = bool(enabled)
+        if not enabled:
+            self.unsetCursor()
+
+    def set_overlay_hint(self, markup: str) -> None:
+        """The tooltip's second line, the Zone Overlay double-click with its key chip."""
+        self._overlay_hint = markup
 
     def update_data(self, occ: np.ndarray | None, warnings: tuple[bool, bool] = (False, False)) -> None:
         self._occ = occ
@@ -777,16 +801,38 @@ class ZoneStripWidget(QWidget):
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._occ is not None and self.width() > 0:
-            self.zone_clicked.emit(self._cell_at(event.position().x()))
+            self._pending = self._cell_at(event.position().x())
+            self._click_timer.start()
             event.accept()
             return
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._click_timer.stop()
+            self._pending = None
+            self.zone_double_clicked.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def _fire_click(self) -> None:
+        if self._pending is not None:
+            cell, self._pending = self._pending, None
+            self.zone_clicked.emit(cell)
+
     def mouseMoveEvent(self, event) -> None:
         if self._occ is not None and self.width() > 0:
             cell = self._cell_at(event.position().x())
-            self.setToolTip(f"Zone {self._LABELS[cell]} — {float(self._occ[cell]) * 100:.1f}% · click to place a tone here")
-            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            text = f"Zone {self._LABELS[cell]} — {float(self._occ[cell]) * 100:.1f}%"
+            if self._placement_enabled:
+                text += " · click to place a tone here"
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+            else:
+                text = f"<b>Disabled for Slides/Reversal Film</b><br>{text}"
+            if self._overlay_hint:
+                text += f"<br>{self._overlay_hint}"
+            self.setToolTip(wrap_tooltip(text))
         else:
             self.unsetCursor()
         super().mouseMoveEvent(event)
@@ -1057,3 +1103,44 @@ class MiniRGBHistogramWidget(QWidget):
             c.setAlpha(120)
             painter.setBrush(QBrush(c))
             painter.drawPath(path)
+
+
+class MiniCurveWidget(QWidget):
+    """The print curve as a faint stroke behind the Paper Response section header, in
+    PhotometricCurveWidget's plot domain, with R/G/B traces when the layers diverge."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._base: list[tuple[float, float]] = []
+        self._channels: list[list[tuple[float, float]]] = []
+
+    def set_curves(self, base: list[tuple[float, float]], channels: list[list[tuple[float, float]]]) -> None:
+        self._base = list(base)
+        self._channels = [list(pts) for pts in channels]
+        self.update()
+
+    def _path(self, pts: list[tuple[float, float]], w: int, h: int) -> QPainterPath:
+        x0, x1 = PhotometricCurveWidget._X_MIN, PhotometricCurveWidget._X_MAX
+        y0, y1 = PhotometricCurveWidget._Y_MIN, PhotometricCurveWidget._Y_MAX
+        path = QPainterPath()
+        for i, (x, y) in enumerate(pts):
+            px, py = (x - x0) / (x1 - x0) * w, h - (y - y0) / (y1 - y0) * h
+            if i:
+                path.lineTo(px, py)
+            else:
+                path.moveTo(px, py)
+        return path
+
+    def paintEvent(self, event) -> None:
+        if not self._base:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        w, h = self.width(), self.height()
+        for color, pts in zip((THEME.channel_red, THEME.channel_green, THEME.channel_blue), self._channels):
+            painter.setPen(QPen(_alpha(color, 140), 1.5))
+            painter.drawPath(self._path(pts, w, h))
+        painter.setPen(QPen(_alpha(THEME.text_muted, 160), 1.5))
+        painter.drawPath(self._path(self._base, w, h))

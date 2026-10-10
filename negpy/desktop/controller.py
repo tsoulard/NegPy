@@ -3129,8 +3129,8 @@ class AppController(QObject):
         self.printing_notes_changed.emit(self.state.printing_notes)
 
     def _set_alt_process(self, target: AltProcess, force: Optional[bool] = None) -> None:
-        """B&W only — the stage is a no-op in any other mode. The two processes are
-        mutually exclusive, so selecting one clears the other."""
+        """B&W only — the stage is a no-op in any other mode. The processes are
+        mutually exclusive, so selecting one clears the others."""
         cfg = self.state.config
         on = (cfg.altproc.alt_process != target) if force is None else bool(force)
         mode = target if on else AltProcess.NONE
@@ -3142,6 +3142,9 @@ class AppController(QObject):
 
     def toggle_cyanotype(self, force: Optional[bool] = None) -> None:
         self._set_alt_process(AltProcess.CYANOTYPE, force)
+
+    def toggle_sabattier(self, force: Optional[bool] = None) -> None:
+        self._set_alt_process(AltProcess.SABATTIER, force)
 
     def request_printing_notes_export(self) -> None:
         """Save the marked-up work print as its own file. The annotated pixels live in the
@@ -3171,10 +3174,14 @@ class AppController(QObject):
             counter += 1
         return path
 
+    def zone_placement_available(self) -> bool:
+        """Placement inverts the print curve, so it needs a loaded frame on the print path."""
+        return self.state.preview_raw is not None and not self._on_transfer_path()
+
     def arm_zone_target(self, zone: float) -> None:
         """Zone picked on the strip: the next canvas click prints that spot there.
         Picking the armed zone again disarms."""
-        if self.state.preview_raw is None or self._on_transfer_path():
+        if not self.zone_placement_available():
             return
         if self.state.zone_arm_target == float(zone):
             self._disarm_zone_target()
@@ -5119,6 +5126,7 @@ class AppController(QObject):
         "geometry": "Geometry",
         "color": "Filtration",
         "tone": "Tone",
+        "paper": "Paper Response",
         "lab": "Lab",
         "altproc": "Alternative Processes",
         "toning": "Toning",

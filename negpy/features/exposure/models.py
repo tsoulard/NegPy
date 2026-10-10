@@ -49,6 +49,10 @@ class ExposureConfig:
     contrast_mask: float = 0.0
     # The mask's spacer: the scale above which tones are masked. [2.0, 6.0] %.
     mask_spacer: float = 4.0
+    # A diffuser under the enlarger lens: the light the paper sees is mixed with a blurred
+    # copy of itself, so shadows bleed into highlights. [0, 1]; 0 = off. The spread is fixed
+    # (DIFFUSION_SPREAD).
+    diffusion: float = 0.0
     # Split grade: zone contrast in ISO-R points (negative = harder), global
     # value + per-layer trims like Grade.
     shadow_grade: float = 0.0

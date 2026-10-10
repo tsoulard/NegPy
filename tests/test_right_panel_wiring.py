@@ -196,3 +196,12 @@ def test_first_run_analysis_height_shrinks_on_a_short_screen():
     assert default_analysis_split(screen(1440))[0] == 320
     assert default_analysis_split(screen(900))[0] == 270
     assert default_analysis_split(None)[0] == 320
+
+
+def test_update_analysis_tells_the_strip_whether_placement_is_available() -> None:
+    panel = _panel_stub({"interactive": False, "histogram_density": [1.0]})
+    panel.controller.zone_placement_available.return_value = False
+
+    RightPanel._update_analysis(panel)
+
+    panel.zone_strip.set_placement_enabled.assert_called_once_with(False)

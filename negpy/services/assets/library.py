@@ -49,6 +49,18 @@ def folder_counts(path: str) -> tuple[int, int]:
     return images, subfolders
 
 
+def folder_image_paths(path: str) -> list[str]:
+    """The images ``folder_counts`` counts, as paths."""
+    try:
+        return [
+            entry.path
+            for entry in os.scandir(path)
+            if not is_hidden_path(entry.name) and not entry.is_dir() and _is_image(entry.name) and not is_ir_sidecar_path(entry.path)
+        ]
+    except OSError:
+        return []
+
+
 def summarize_counts(images: int, subfolders: int) -> str:
     parts = []
     if images:

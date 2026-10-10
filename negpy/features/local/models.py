@@ -42,6 +42,10 @@ class LocalMask:
     # Local grade in ISO-R points off the global grade, where negative is harder: the
     # darkroom's "burn this in through the hard filter". 0 prints at the frame's grade.
     grade: float = 0.0
+    # Paper pre-exposure under the mask, a fraction of the threshold exposure like the frame's
+    # Preflash: it compresses the region's highlights without the density a burn adds. 0 is
+    # unflashed. A tone-limited mask carries no flash.
+    flash: float = 0.0
     shape: MaskShape = MaskShape.POLYGON
     # Apply the mask outside the shape, not inside it.
     invert: bool = False
