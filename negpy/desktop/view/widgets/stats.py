@@ -6,6 +6,8 @@ from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButto
 from negpy.desktop.view.styles.theme import THEME
 from negpy.features.exposure.stats import StatRow
 
+CLIPPING_TOOLTIP = "Share of pixels crushed to black (shadows) or blown to white (highlights), worst channel. Turns amber above 1%."
+
 _TOOLTIPS = {
     "Negative": (
         "The negative itself: relative density range (luminance) and its development character vs a "
@@ -16,18 +18,18 @@ _TOOLTIPS = {
         "Where the frame's midtone sits, in stops from neutral: positive = brighter (high-key), "
         "negative = darker (low-key). Approximate — read off the metered midtone, not a precise meter."
     ),
-    "Clipping": ("Share of pixels crushed to black (shadows) or blown to white (highlights), worst channel. Turns red above 1%."),
+    "Clipping": CLIPPING_TOOLTIP,
     "Scan clip": (
         "Share of source-scan pixels at/above sensor white, per channel. In a negative scan the film base and "
         "scene shadows sit near sensor white — clipping there destroys base/shadow separation. Fix at capture: "
-        "expose the scan lower. Turns red above 1%."
+        "expose the scan lower. Turns amber above 1%."
     ),
     "Gamut": (
         "Share of the frame the soft-proofed output profile cannot print. The Clipping row says a "
         "tone ran off the end of the paper; this says a color is outside what the profile can make, "
         "so it will be pulled to the nearest one it can. Blank unless soft proofing to an "
         "output profile. Quantized to a 32-step color grid, so it answers how much of the frame, not "
-        "which pixel. Turns red above 2%."
+        "which pixel. Turns amber above 2%."
     ),
     "Repair": (
         "Share of the scan each repair route rewrote: IR Restore, detected dust, and painted heals "

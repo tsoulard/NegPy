@@ -3,7 +3,7 @@ import re
 import threading
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
-from typing import Any, Collection, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Collection, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from PyQt6.QtCore import QAbstractListModel, QModelIndex, QObject, Qt, pyqtSignal
@@ -143,6 +143,8 @@ class AppState:
     ir_degenerate: bool = False  # IR plane carries image content (B&W/Kodachrome) → IR restore disabled
     original_res: tuple[int, int] = (0, 0)
     clipboard: Optional[WorkspaceConfig] = None
+    # The rows a card copy holds; Paste writes them with no picker. None after a whole copy.
+    clipboard_rows: Optional[list] = None
 
     # ICC Management
     icc_input_path: Optional[str] = None
@@ -194,6 +196,8 @@ class AppState:
 
     # Canvas background color swatch index (0=Black, 1=Dark Gray, 2=Mid Gray)
     canvas_bg_index: int = 0
+    # Preferences > Accessibility, a key into styles.color_vision.PALETTES
+    color_vision: str = "standard"
 
     # When False, fit-to-window reserves space for the floating toolbar so the image never
     # sits behind it. When True (default), the image fills the canvas and the toolbar overlaps.
@@ -419,7 +423,7 @@ class AssetListModel(QAbstractListModel):
         self._filter_regex: bool = False
         self._filter_pattern: Optional[re.Pattern] = None
         self._filter_terms: list = []
-        self._sheet_filter: str = "all"  # "all" | "keepers" | "unrejected"
+        self._sheet_filter: str = "all"  # "all" | "keepers" | "unrejected" | "unmarked"
         self._semantic_query: Optional[np.ndarray] = None
         self._sorted_indices: list[int] = []
         # Each display row's stable identity as of the last rebuild — a cache, not a re-derive
@@ -436,6 +440,8 @@ class AssetListModel(QAbstractListModel):
             indices = [i for i in indices if files[i].get("keeper")]
         elif self._sheet_filter == "unrejected":
             indices = [i for i in indices if not files[i].get("excluded")]
+        elif self._sheet_filter == "unmarked":
+            indices = [i for i in indices if not files[i].get("keeper") and not files[i].get("excluded")]
 
         if self._semantic_query is not None:
             self._sorted_indices = self._rank_by_similarity(indices, files)
@@ -511,7 +517,7 @@ class AssetListModel(QAbstractListModel):
         return self._semantic_query is not None
 
     def set_sheet_filter(self, mode: str) -> None:
-        if mode not in ("all", "keepers", "unrejected"):
+        if mode not in ("all", "keepers", "unrejected", "unmarked"):
             mode = "all"
         self._sheet_filter = mode
         self._apply_reindex()
@@ -797,6 +803,8 @@ class DesktopSessionManager(QObject):
     active_file_changing = pyqtSignal()  # Outgoing file about to be replaced — last chance to snapshot it
     settings_copied = pyqtSignal()
     settings_pasted = pyqtSignal()
+    # A view that reads styles.color_vision repaints on this.
+    color_vision_changed = pyqtSignal()
     settings_synced = pyqtSignal(str)  # Bulk "Apply to selected" done — carries a status message
     frames_edited_offscreen = pyqtSignal(list)  # hashes whose saved edits changed without a render
     file_selected = pyqtSignal(str)  # Emits file path when active file changes
@@ -847,6 +855,7 @@ class DesktopSessionManager(QObject):
         saved_bg = self.repo.get_global_setting("canvas_bg_index")
         if saved_bg is not None:
             self.state.canvas_bg_index = int(saved_bg)
+        self.state.color_vision = str(self.repo.get_global_setting("color_vision", "standard") or "standard")
 
         saved_immersive = self.repo.get_global_setting("immersive_canvas")
         if saved_immersive is not None:
@@ -1042,6 +1051,12 @@ class DesktopSessionManager(QObject):
         if self.state.canvas_bg_index != index:
             self.state.canvas_bg_index = index
             self.repo.save_global_setting("canvas_bg_index", index)
+
+    def set_color_vision(self, key: str) -> None:
+        if self.state.color_vision != key:
+            self.state.color_vision = key
+            self.repo.save_global_setting("color_vision", key)
+            self.color_vision_changed.emit()
 
     def set_crop_guide(self, guide: str) -> None:
         """Updates and persists the crop composition guide."""
@@ -1402,6 +1417,16 @@ class DesktopSessionManager(QObject):
             return
         other = "excluded" if mark == "keeper" else "keeper"
         set_all = not all(state.uploaded_files[i].get(mark) for i in targets)
+        # Read before the refresh: under a mark filter the marked frame leaves the view.
+        row = self.asset_model.actual_to_display(targets[0])
+        advance_to = None
+        if (
+            set_all
+            and len(targets) == 1
+            and 0 <= row < self.asset_model.rowCount() - 1
+            and self.repo.get_global_setting("advance_after_mark", False)
+        ):
+            advance_to = self.asset_model.display_to_actual(row + 1)
         for i in targets:
             f = state.uploaded_files[i]
             f[mark] = set_all
@@ -1410,6 +1435,8 @@ class DesktopSessionManager(QObject):
             self.repo.save_file_mark(unforked_hash(f["hash"]), mark if set_all else None, file_path=f.get("path", ""))
         self.asset_model.refresh()
         self.files_changed.emit()
+        if advance_to is not None:
+            self.select_file(advance_to)
 
     def _stamp_scenes(self) -> None:
         by_hash = rolls.scene_by_hash(self.repo, self.state.active_roll_id)
@@ -1498,12 +1525,20 @@ class DesktopSessionManager(QObject):
             self.frames_edited_offscreen.emit(changed_hashes)
         return count
 
-    def apply_preset_fields(self, source: WorkspaceConfig, rows, scope: str = "current") -> int:
+    def apply_preset_fields(
+        self,
+        source: WorkspaceConfig,
+        rows,
+        scope: str = "current",
+        finish: Optional[Callable[[WorkspaceConfig], WorkspaceConfig]] = None,
+        label: str = "Preset applied",
+    ) -> int:
         """Overlay a preset's chosen rows onto the current frame, the selection, or
         the whole (visible) roll. Unlike sync_selected_settings the source is the
-        preset itself, so the active frame is a target too. Returns frames changed."""
+        preset itself, so the active frame is a target too. `finish` runs on each
+        overlaid config, for fields outside the catalog. Returns frames changed."""
         rows = list(rows)
-        if not rows or self.state.selected_file_idx == -1:
+        if not (rows or finish) or self.state.selected_file_idx == -1:
             return 0
 
         if scope in ("roll", "selection"):
@@ -1517,13 +1552,16 @@ class DesktopSessionManager(QObject):
             if not (0 <= idx < len(self.state.uploaded_files)):
                 continue
             if idx == self.state.selected_file_idx:
-                self.update_config(apply_selected_fields(source, self.state.config, rows), persist=True, render=False)
+                overlaid = apply_selected_fields(source, self.state.config, rows)
+                self.update_config(finish(overlaid) if finish else overlaid, persist=True, render=False)
                 self._relock_diverged_cards()
                 count += 1
                 continue
             target_hash = self.state.uploaded_files[idx]["hash"]
             target_config = self.config_for_asset(self.state.uploaded_files[idx])
             synced = apply_selected_fields(source, target_config, rows)
+            if finish:
+                synced = finish(synced)
             self.push_external_history(target_hash, target_config, synced)
             self.repo.save_file_settings(target_hash, synced, file_path=self.state.uploaded_files[idx]["path"])
             self._lock_diverged_cards(self.state.uploaded_files[idx], synced)
@@ -1531,9 +1569,9 @@ class DesktopSessionManager(QObject):
             count += 1
 
         if count:
-            n = len(rows)
+            n = len(rows) + int(finish is not None)
             noun = "setting" if n == 1 else "settings"
-            self.settings_synced.emit(f"Preset applied: {n} {noun} to {count} frame{'s' if count != 1 else ''}")
+            self.settings_synced.emit(f"{label}: {n} {noun} to {count} frame{'s' if count != 1 else ''}")
             self.settings_saved.emit()
             if changed_hashes:
                 self.frames_edited_offscreen.emit(changed_hashes)
@@ -1647,6 +1685,18 @@ class DesktopSessionManager(QObject):
             return
         if display_idx < self.asset_model.rowCount() - 1:
             self.select_file(self.asset_model.display_to_actual(display_idx + 1))
+
+    def first_file(self) -> None:
+        self._select_display_row(0)
+
+    def last_file(self) -> None:
+        self._select_display_row(self.asset_model.rowCount() - 1)
+
+    def _select_display_row(self, row: int) -> None:
+        if 0 <= row < self.asset_model.rowCount():
+            target = self.asset_model.display_to_actual(row)
+            if target != self.state.selected_file_idx:
+                self.select_file(target)
 
     def prev_file(self) -> None:
         display_idx = self.asset_model.actual_to_display(self.state.selected_file_idx)
@@ -1943,14 +1993,21 @@ class DesktopSessionManager(QObject):
                 ),
             )
         self.state.clipboard = cfg
+        self.state.clipboard_rows = None
         self.state_changed.emit()
         self.settings_copied.emit()
+
+    def copy_card_settings(self, rows) -> None:
+        """Copy one card: the clipboard holds the config, and Paste writes only these rows."""
+        self.copy_settings()
+        self.state.clipboard_rows = list(rows)
 
     def copy_settings_with_bounds(self) -> None:
         self.copy_settings(include_bounds=True)
 
     def apply_pasted_fields(self, rows, include_bounds: bool = True) -> None:
-        """Overlay the picked clipboard settings onto the active frame.
+        """Overlay the picked clipboard settings onto the active frame, or onto every
+        selected frame when the selection holds more than one.
 
         The per-frame bounds ride along when the clipboard holds them (only a copy
         with bounds does; copy_settings strips them otherwise) and the paste picker
@@ -1964,17 +2021,25 @@ class DesktopSessionManager(QObject):
         bounds = include_bounds and clip.process.is_local_initialized
         if not rows and not bounds:
             return
-        merged = apply_selected_fields(clip, self.state.config, rows)
-        if bounds:
-            merged = replace(
-                merged,
+
+        def with_bounds(cfg: WorkspaceConfig) -> WorkspaceConfig:
+            return replace(
+                cfg,
                 process=replace(
-                    merged.process,
+                    cfg.process,
                     local_floors=clip.process.local_floors,
                     local_ceils=clip.process.local_ceils,
                     lock_bounds=clip.process.lock_bounds,
                 ),
             )
+
+        if len(self._scope_indices("selection")) > 1:
+            self.apply_preset_fields(clip, rows, "selection", finish=with_bounds if bounds else None, label="Pasted")
+            self.state_changed.emit()
+            return
+        merged = apply_selected_fields(clip, self.state.config, rows)
+        if bounds:
+            merged = with_bounds(merged)
         self.update_config(merged, persist=True)
         self._relock_diverged_cards()
         self.settings_pasted.emit()

@@ -301,8 +301,11 @@ class ShortcutManager:
         actions: dict[str, Callable[[], None]] = {
             "prev_file": controller.session.prev_file,
             "next_file": controller.session.next_file,
+            "first_file": controller.session.first_file,
+            "last_file": controller.session.last_file,
             "toggle_keep": lambda: controller.session.toggle_mark("keeper"),
             "toggle_scene_overlay": lambda: self.window.session_panel.file_browser.scenes_btn.click(),
+            "toggle_advance_after_mark": lambda: self.window.session_panel.file_browser.act_advance_after_mark.toggle(),
             "hdr_merge": controller.request_hdr_merge_selected,
             "hdr_unmerge": controller.request_unmerge_hdr,
             # The view method, not the controller's: it carries the confirm the deletion needs.
@@ -418,6 +421,7 @@ class ShortcutManager:
             "reset_tab": lambda: _fire_tab_header(right, "reset"),
             "reset_tab_to_roll": lambda: _fire_tab_header(right, "revert"),
             "reset_to_roll": controller.revert_frame_to_roll,
+            "undo_roll_push": controller.undo_roll_push,
             "load_sidecar": lambda: load_edit_from_sidecar(self.window, controller),
             "apply_tab": lambda: _fire_tab_header(right, "apply"),
             "toggle_tab_cards": lambda: _fire_tab_header(right, "cards"),

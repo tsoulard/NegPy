@@ -131,7 +131,7 @@ def test_unparsable_coordinates_are_reported_and_not_applied(monkeypatch) -> Non
     dlg.coords_edit.setText("somewhere nice")
     dlg._on_coords_edited()
     assert dlg.location()[:2] == (None, None)
-    assert "not recognised" in dlg.status_label.text()
+    assert "not recognized" in dlg.status_label.text()
 
 
 def test_clicking_the_map_fills_place_from_reverse_lookup(monkeypatch) -> None:

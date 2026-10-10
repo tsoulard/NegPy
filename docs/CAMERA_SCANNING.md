@@ -80,8 +80,10 @@ automatically. There is no address to type, no login and no pairing.
 **Frame and focus.** Open **Live View**. Click anywhere on the image to aim the
 camera's *hardware* focus magnifier at that spot. Click again to return to the full frame.
 The **Focus meter** under the image reads live sharpness against the best value since the
-last click: turn the focus ring past best focus, then back until it reads **at peak**. It
-works on every body with live view.
+view last changed. A click changes the view. So does the body's own magnifier: Sony's MF
+Assist zooms in when the focus ring turns, and **Focus Magnif. Time** zooms back out after
+2 s or 5 s. Set it to **No Limit** to keep the zoom while you focus. Turn the focus ring past
+best focus, then back until it reads **at peak**. It works on every body with live view.
 In white-light and normal (camera-only) scanning, you can set ISO, shutter and aperture
 live from the toolbar. With a calibrated RGB preset those controls are hidden and locked to
 the preset instead (see **Presets**), so the scan cannot drift. A control the body cannot

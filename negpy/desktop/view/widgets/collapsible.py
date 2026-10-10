@@ -11,8 +11,8 @@ from PyQt6.QtWidgets import (
     QStackedLayout,
 )
 from PyQt6.QtGui import QIcon
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
-from negpy.desktop.view.styles.templates import HEADER_BUTTON_SIZE, HEADER_HEIGHT, HEADER_ICON_SIZE, wrap_tooltip
+from PyQt6.QtCore import Qt, pyqtSignal
+from negpy.desktop.view.styles.templates import HEADER_HEIGHT, header_button
 from negpy.desktop.view.styles.theme import THEME
 from negpy.desktop.view.widgets.sliders import align_slider_columns
 import qtawesome as qta
@@ -119,29 +119,17 @@ class CollapsibleSection(QWidget):
         if info:
             # Nested in the header button, like reset_btn: it eats its own clicks, so opening the help
             # does not also collapse the section.
-            self.info_btn = QPushButton()
-            self.info_btn.setIcon(qta.icon("fa5s.info-circle", color=THEME.text_muted))
-            self.info_btn.setFixedSize(HEADER_BUTTON_SIZE, HEADER_BUTTON_SIZE)
-            self.info_btn.setIconSize(QSize(HEADER_ICON_SIZE, HEADER_ICON_SIZE))
-            self.info_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.info_btn.setToolTip(f"What am I looking at? — {title} guide")
-            self.info_btn.setObjectName("collapsible_reset_btn")
+            self.info_btn = header_button(qta.icon("fa5s.info-circle", color=THEME.text_muted), f"What am I looking at? — {title} guide")
             self.info_btn.clicked.connect(self.info_requested)
             btn_layout.addWidget(self.info_btn)
 
-        self.reset_btn = QPushButton()
-        self.reset_btn.setIcon(qta.icon("fa5s.undo", color=THEME.text_muted))
-        self.reset_btn.setFixedSize(HEADER_BUTTON_SIZE, HEADER_BUTTON_SIZE)
-        self.reset_btn.setIconSize(QSize(HEADER_ICON_SIZE, HEADER_ICON_SIZE))
-        self.reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.reset_btn.setToolTip(f"Reset {title} to defaults")
+        self.reset_btn = header_button(qta.icon("fa5s.undo", color=THEME.text_muted), f"Reset {title} to defaults")
         self.reset_btn.setVisible(False)
-        self.reset_btn.setObjectName("collapsible_reset_btn")
         self.reset_btn.clicked.connect(self._on_reset_clicked)
         btn_layout.addWidget(self.reset_btn)
 
         # Hidden until set_roll_revert: most cards on most frames already follow the roll.
-        self.roll_revert_btn = self._header_button(roll_revert_icon(THEME.text_muted), f"Reset {title} to the roll's settings")
+        self.roll_revert_btn = header_button(roll_revert_icon(THEME.text_muted), f"Reset {title} to the roll's settings")
         self.roll_revert_btn.setVisible(False)
         self.roll_revert_btn.clicked.connect(self.roll_revert_requested)
         btn_layout.addWidget(self.roll_revert_btn)
@@ -190,17 +178,6 @@ class CollapsibleSection(QWidget):
 
         if collapsible:
             self.toggle_button.toggled.connect(self._on_toggle)
-
-    def _header_button(self, icon: QIcon, tooltip: str) -> QPushButton:
-        """The header's own button size and look, the one reset and the scope pair use."""
-        btn = QPushButton()
-        btn.setIcon(icon)
-        btn.setFixedSize(HEADER_BUTTON_SIZE, HEADER_BUTTON_SIZE)
-        btn.setIconSize(QSize(HEADER_ICON_SIZE, HEADER_ICON_SIZE))
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setObjectName("collapsible_reset_btn")
-        btn.setToolTip(wrap_tooltip(tooltip))
-        return btn
 
     def set_content(self, widget: QWidget) -> None:
         # Plain QWidget content is painted #0D0D0D by the global `QWidget {}` QSS rule, covering
@@ -273,7 +250,7 @@ class CollapsibleSection(QWidget):
             self.toggle_button.setChecked(expanded)
 
     def add_header_toggle(self, icon_name: str, tooltip: str) -> QPushButton:
-        btn = self._header_button(qta.icon(icon_name, color=THEME.text_muted, color_on=THEME.text_on_accent), tooltip)
+        btn = header_button(qta.icon(icon_name, color=THEME.text_muted, color_on=THEME.text_on_accent), tooltip)
         btn.setCheckable(True)
         self._header_row.insertWidget(self._header_row.count() - 1, btn)
         return btn
@@ -283,12 +260,7 @@ class CollapsibleSection(QWidget):
         past the section's own settings -- Film Strip's New Roll and its roll-wide
         reset, for one. reset_btn stays the affordance for resetting this section."""
         if self.actions_btn is None:
-            self.actions_btn = QPushButton()
-            self.actions_btn.setIcon(qta.icon("fa5s.ellipsis-v", color=THEME.text_muted))
-            self.actions_btn.setFixedSize(HEADER_BUTTON_SIZE, HEADER_BUTTON_SIZE)
-            self.actions_btn.setIconSize(QSize(HEADER_ICON_SIZE, HEADER_ICON_SIZE))
-            self.actions_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.actions_btn.setObjectName("collapsible_reset_btn")
+            self.actions_btn = header_button(qta.icon("fa5s.ellipsis-v", color=THEME.text_muted), "")
             self._header_row.insertWidget(self._header_row.count() - 1, self.actions_btn)
         self.actions_btn.setToolTip(tooltip)
         self.actions_btn.setMenu(menu)
@@ -334,13 +306,9 @@ class CollapsibleSection(QWidget):
         style.polish(self.toggle_button)
 
     def _build_scope_button(self, icon_name: str, scope: str) -> QPushButton:
-        btn = QPushButton()
+        btn = header_button(QIcon(), "")
         btn.setCheckable(True)
         btn.setProperty("scope_icon", icon_name)
-        btn.setFixedSize(HEADER_BUTTON_SIZE, HEADER_BUTTON_SIZE)
-        btn.setIconSize(QSize(HEADER_ICON_SIZE, HEADER_ICON_SIZE))
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setObjectName("collapsible_reset_btn")
         # Checked is display only: the pair is a readout as much as a control, so a click
         # on the half already active must not un-check it into a third, meaningless state.
         btn.clicked.connect(lambda: self._on_scope_clicked(scope))

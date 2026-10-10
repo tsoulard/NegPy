@@ -18,6 +18,7 @@ from negpy.desktop.converters import ImageConverter
 from negpy.desktop.session import UNCROPPED_PREVIEW_TOOLS, AppState, ToolMode
 from negpy.desktop.view.canvas.crop_guides import CropGuide, guide_shapes
 from negpy.desktop.view.canvas.printing_notes import notes_outline, notes_sheet, paint_card, paint_map
+from negpy.desktop.view.styles.color_vision import palette_for
 from negpy.desktop.view.styles.theme import THEME
 from negpy.desktop.view.widgets.stats import PIN_COLORS
 from negpy.domain.types import LUMA_B, LUMA_G, LUMA_R
@@ -85,11 +86,7 @@ _SHAPE_FOR_TOOL = {
 }
 _LOCAL_TOOLS = (ToolMode.NONE, *_SHAPE_FOR_TOOL)
 
-# Dust-overlay marker colors: bright, and distinct from the muted accent of manual heals, so
-# auto-detected and IR spots are told apart at a glance.
-_DUST_MARK_LUMA = QColor(57, 255, 20)  # neon: a mark has to read over any film, so it is not a palette colour
-_DUST_MARK_IR = QColor(255, 0, 255)  # neon magenta — IR detection
-_IR_CORRECTED_ALPHA = 55  # dim magenta wash over IR-division-corrected regions
+_IR_CORRECTED_ALPHA = 55  # dim wash over repaired regions
 
 _ZONE_LINE_ALPHA = 150
 _ZONE_LINE_SHADOW_ALPHA = 110  # dark underlay so the white edges hold over blown highlights
@@ -1954,8 +1951,8 @@ class CanvasOverlay(QWidget):
 
     def _draw_dust_overlay(self, painter: QPainter) -> None:
         """Display-only visualization of the auto/IR dust-detection set. Modes:
-        'marked' (neon markers over the image), 'ir' (the geometry-aligned raw IR
-        channel, no markers)."""
+        'marked' (washes over the image), 'ir' (the geometry-aligned raw IR channel, no
+        markers)."""
         mode = self.state.dust_overlay_mode
         if mode == "ir":
             img = self._ir_layer_qimage()
@@ -1963,9 +1960,8 @@ class CanvasOverlay(QWidget):
                 painter.drawImage(self._content_view_rect(), img)
             return
 
-        # Dim wash over every repaired region. No source emits capsules any more, since they are
-        # all masks by the time they reach the render, so color tells them apart: green for
-        # optically detected specks, magenta for IR and inpainted defects.
+        # Dim wash over every repaired region. Every source reaches the render as a mask, so the
+        # Color vision pair tells them apart: optically detected specks, then IR and inpainted defects.
         for mask, color in self._corrected_masks():
             wash = self._mask_wash_qimage(mask, color)
             if wash is not None:
@@ -2002,16 +1998,18 @@ class CanvasOverlay(QWidget):
     def _corrected_masks(self) -> List[Tuple[np.ndarray, QColor]]:
         """Repaired-region masks to wash, with the color that names their source."""
         with self.state.metrics_lock:
+            # Detected dust and IR repairs are told apart by hue alone.
+            luma_color, ir_color = (QColor(c) for c in palette_for(self.state.color_vision).pair)
             masks: List[Tuple[np.ndarray, QColor]] = []
             luma = self.state.last_metrics.get("detected_dust_mask")
             if luma is not None:
-                masks.append((luma, _DUST_MARK_LUMA))
+                masks.append((luma, luma_color))
             corr = self.state.last_metrics.get("ir_corrected_mask")
             if corr is not None:
-                masks.append((corr, _DUST_MARK_IR))
+                masks.append((corr, ir_color))
             hairs = self.state.last_metrics.get("hair_inpaint_masks")
             if hairs:
-                masks.extend((h, _DUST_MARK_IR) for h in hairs)
+                masks.extend((h, ir_color) for h in hairs)
         return masks
 
     def _mask_wash_qimage(self, mask: np.ndarray, color: QColor) -> Optional[QImage]:
@@ -2376,6 +2374,7 @@ class CanvasOverlay(QWidget):
         selected = getattr(self.state, "local_selected_mask", -1)
         limited = limited_indices(self.state.config.local)
         fresh_cache: Dict[tuple, QImage] = {}
+        dodge_burn = palette_for(self.state.color_vision).dodge_burn
         for i, mask in enumerate(masks):
             is_selected = i == selected
             if len(mask.vertices) < min_points(mask.shape):
@@ -2391,7 +2390,7 @@ class CanvasOverlay(QWidget):
 
             if not mask.enabled or i in getattr(self.state, "local_hidden_masks", ()):
                 continue
-            outline = QColor(THEME.burn) if mask.stops > 0 else QColor(THEME.dodge)
+            outline = QColor(dodge_burn[1] if mask.stops > 0 else dodge_burn[0])
             max_alpha = 70 if is_selected else 32
 
             # A vertex drag skips the feathered fill; it re-rasters every frame. A gesture on
@@ -2534,7 +2533,7 @@ class CanvasOverlay(QWidget):
             for i, (mask, ctrl) in enumerate(zip(self.state.config.local.masks, self._local_mask_screen_ctrl))
             if mask.enabled and len(ctrl) >= min_points(mask.shape)
         ]
-        paint_map(painter, polys)
+        paint_map(painter, polys, palette_for(self.state.color_vision).dodge_burn)
         paint_card(painter, QPointF(rect.x() + _NOTES_CARD_INSET_PX, rect.y() + _NOTES_CARD_TOP_PX), self._recipe_lines())
 
     def printing_notes_sheet(self) -> Optional[QImage]:
@@ -2551,7 +2550,13 @@ class CanvasOverlay(QWidget):
         if uv_grid is None and self.state.config.local.masks:
             return None
         return notes_sheet(
-            img, self._content_rect, self.state.config.local, uv_grid, self._recipe_lines(), self.state.config.exposure.grade
+            img,
+            self._content_rect,
+            self.state.config.local,
+            uv_grid,
+            self._recipe_lines(),
+            palette_for(self.state.color_vision).dodge_burn,
+            self.state.config.exposure.grade,
         )
 
     def _draw_local_handles(self, painter: QPainter, shape: MaskShape, ctrl_pts: List[QPointF], color: QColor) -> None:

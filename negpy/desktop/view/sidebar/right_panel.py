@@ -649,6 +649,7 @@ class RightPanel(QWidget):
             self.curve_widget.set_show_print(False)
             self.curve_widget.set_channel_density(True)
             self._clip_fracs = (None, None)
+            self.controls_panel.process_sidebar.set_clipping(None, None)
             self.zone_strip.setVisible(False)
             return
         self.curve_widget.set_show_print(True)
@@ -668,6 +669,7 @@ class RightPanel(QWidget):
 
         self.curve_widget.set_output_histogram(bins)
         self._clip_fracs = output_clip_fractions(bins) if bins is not None else (None, None)
+        self.controls_panel.process_sidebar.set_clipping(*self._clip_fracs)  # the Metering card's line, one computation
 
         # A flat log master has no print zones, so hide them rather than mislead.
         if bins is None or self.controller.state.flat_peek:

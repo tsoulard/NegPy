@@ -450,3 +450,75 @@ def test_the_calibration_reset_clears_the_unmix_matrices():
     after = panel.controller.apply_config.call_args[0][0].process
     for field in ("sensor_profile", "sensor_matrix", "crosstalk_matrix", "crosstalk_process"):
         assert getattr(after, field) == getattr(DEFAULT_WORKSPACE_CONFIG.process, field), field
+
+
+def test_the_metering_header_follows_the_print_histogram():
+    import numpy as np
+
+    from negpy.desktop.view.sidebar.controls_panel import ControlsPanel
+
+    panel = MagicMock()
+    panel._last_histogram_buf = None
+    bins = np.zeros((4, 256))
+    panel.controller.state.last_metrics = {"histogram_raw": bins}
+
+    ControlsPanel._update_histogram(panel)
+
+    panel.metering_histogram.update_data.assert_called_once_with(bins)
+
+
+def _card_menu(monkeypatch, key: str):
+    from types import SimpleNamespace
+
+    from PyQt6.QtCore import QPoint
+
+    from negpy.desktop.view.sidebar import controls_panel as cp
+
+    actions = []
+
+    class FakeAction:
+        def __init__(self, text):
+            self.text, self.enabled, self.slot = text, True, None
+            self.triggered = SimpleNamespace(connect=lambda fn: setattr(self, "slot", fn))
+
+        def setToolTip(self, _tip):
+            pass
+
+        def setEnabled(self, enabled):
+            self.enabled = enabled
+
+    class FakeMenu:
+        def __init__(self, *_a):
+            pass
+
+        def setToolTipsVisible(self, _on):
+            pass
+
+        def addAction(self, text):
+            actions.append(FakeAction(text))
+            return actions[-1]
+
+        def exec(self, *_a):
+            pass
+
+    monkeypatch.setattr(cp, "QMenu", FakeMenu)
+    panel = SimpleNamespace(_roll_sections=lambda: (("optics", None),), controller=MagicMock())
+    panel.controller.can_undo_roll_push.return_value = False
+    cp.ControlsPanel._show_card_menu(panel, key, SimpleNamespace(toggle_button=MagicMock()), QPoint())
+    return panel, actions
+
+
+def test_a_roll_card_menu_offers_undo_only_for_its_own_cards(monkeypatch):
+    panel, actions = _card_menu(monkeypatch, "optics")
+    assert [a.text for a in actions] == ["Undo Apply to Roll"]
+    panel.controller.can_undo_roll_push.assert_called_once_with(("lens", "flatfield"))
+    assert not actions[0].enabled
+
+
+def test_a_frame_card_menu_copies_that_card(monkeypatch):
+    from negpy.desktop.settings_catalog import frame_card_rows
+
+    panel, actions = _card_menu(monkeypatch, "lab")
+    assert [a.text for a in actions] == ["Copy Card Settings"]
+    actions[0].slot()
+    panel.controller.session.copy_card_settings.assert_called_once_with(frame_card_rows("lab"))

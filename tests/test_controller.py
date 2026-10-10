@@ -1267,6 +1267,72 @@ class TestAppController(unittest.TestCase):
         self.assertEqual(rolls.roll_defaults(self.controller.session.repo, roll_id)["hue_trim"], 2.5)
         self.assertEqual(rolls.frame_override_cards(self.controller.session.repo, roll_id, "h1"), {"autocrop"})
 
+    def test_undo_apply_to_roll_restores_the_roll_and_the_lock(self):
+        from negpy.services.assets import rolls
+
+        self._wire_repo_store()
+        repo = self.controller.session.repo
+        roll_id = rolls.create_virtual_roll(repo, "Portra", [])
+        rolls.set_roll_defaults(repo, roll_id, hue_trim=1.0)
+        rolls.set_frame_override(repo, roll_id, "h1", "sensor", locked=True)
+        state = self.mock_session_manager.state
+        state.active_roll_id = roll_id
+        state.uploaded_files = [{"name": f"{h}.dng", "path": f"/{h}.dng", "hash": h} for h in ("h1", "h2")]
+        state.current_file_hash = "h1"
+        state.stale_thumbnails = set()
+        state.config = replace(state.config, process=replace(state.config.process, hue_trim=2.5))
+        before = rolls.roll_defaults(repo, roll_id)
+
+        self.controller.apply_roll_card("sensor")
+        self.assertTrue(self.controller.can_undo_roll_push())
+        state.stale_thumbnails.clear()
+        rolls.set_roll_defaults(repo, roll_id, analysis_buffer=0.2)  # another card, written after the push
+        self.controller.undo_roll_push()
+
+        self.assertEqual(rolls.roll_defaults(repo, roll_id), {**before, "analysis_buffer": 0.2})
+        self.assertEqual(rolls.frame_override_cards(repo, roll_id, "h1"), {"sensor"})
+        self.assertEqual(state.stale_thumbnails, {asset_thumbnail_key(state.uploaded_files[1])})
+        self.assertFalse(self.controller.can_undo_roll_push(), "one step only")
+
+    def test_undo_apply_to_roll_drops_a_field_the_roll_never_had(self):
+        from negpy.services.assets import rolls
+
+        self._wire_repo_store()
+        repo = self.controller.session.repo
+        roll_id = rolls.create_virtual_roll(repo, "Portra", [])
+        rolls.set_frame_override(repo, roll_id, "h1", "autocrop", locked=True)
+        state = self.mock_session_manager.state
+        state.active_roll_id = roll_id
+        state.uploaded_files = [{"name": "a.dng", "path": "/a.dng", "hash": "h1"}]
+        state.current_file_hash = "h1"
+
+        self.controller.apply_roll_card("autocrop")
+        self.assertTrue(self.controller.can_undo_roll_push(("autocrop",)))
+        self.assertFalse(self.controller.can_undo_roll_push(("sensor",)), "another card's push is not this card's undo")
+        self.controller.undo_roll_push()
+
+        self.assertEqual(rolls.roll_defaults(repo, roll_id), {})
+
+    def test_undo_apply_to_roll_is_offered_only_on_the_pushing_frame(self):
+        from negpy.services.assets import rolls
+
+        self._wire_repo_store()
+        repo = self.controller.session.repo
+        roll_id = rolls.create_virtual_roll(repo, "Portra", [])
+        rolls.set_frame_override(repo, roll_id, "h1", "sensor", locked=True)
+        state = self.mock_session_manager.state
+        state.active_roll_id = roll_id
+        state.uploaded_files = [{"name": "a.dng", "path": "/a.dng", "hash": "h1"}]
+        state.current_file_hash = "h1"
+
+        self.controller.apply_roll_card("sensor")
+        state.current_file_hash = "h2"
+
+        self.assertFalse(self.controller.can_undo_roll_push())
+        pushed = rolls.roll_defaults(repo, roll_id)
+        self.controller.undo_roll_push()
+        self.assertEqual(rolls.roll_defaults(repo, roll_id), pushed)
+
     def test_cast_removal_is_its_own_roll_card(self):
         from negpy.services.assets import rolls
 
@@ -4994,6 +5060,17 @@ class TestEmbeddedPeek(unittest.TestCase):
             self.controller.toggle_embedded_peek(force=True)
         read.assert_called_once()
 
+    def test_an_edit_ends_the_embedded_peek(self):
+        from dataclasses import replace
+
+        with patch("negpy.desktop.controller.PreviewManager.try_splash_preview", return_value=(self._preview(), (8, 6))):
+            self.controller.toggle_embedded_peek(force=True)
+        exposure = replace(self.controller.state.config.exposure, density=self.controller.state.config.exposure.density + 0.1)
+        self.controller.state.config = replace(self.controller.state.config, exposure=exposure)
+        with patch.object(self.controller, "_dispatch_pending_render"):
+            self.controller.request_render()
+        self.assertFalse(self.controller.state.embedded_peek)
+
     def test_a_source_with_no_preview_says_so_and_stays_off(self):
         seen: list = []
         self.controller.embedded_peek_changed.connect(seen.append)
@@ -5444,26 +5521,140 @@ class TestCompareFlatPeekInteraction(unittest.TestCase):
         # Framing a crop against a pre-cropped frame would be impossible.
         self.assertEqual(self.controller.state.peek_frame["base_positive"].shape, (6, 10, 3))
 
-    def test_any_plain_render_leaves_the_negative_peek(self):
-        self.controller.state.negative_peek = True
+    def _track_config(self):
+        self.mock_session_manager.update_config.side_effect = lambda config, **_kwargs: setattr(self.controller.state, "config", config)
+
+    def test_a_view_only_render_keeps_the_negative_peek(self):
+        self.controller.toggle_negative_peek(force=True)
         seen: list = []
         self.controller.negative_peek_changed.connect(seen.append)
         with patch.object(self.controller, "_dispatch_pending_render"):
+            self.controller.set_soft_proof(not self.controller.state.soft_proof_enabled)
             self.controller.request_render()
         self.assertTrue(self.controller.state.negative_peek)
         self.assertEqual(seen, [])
 
-    def test_rerender_active_view_keeps_the_negative_peek(self):
+    def test_an_edit_ends_the_negative_peek(self):
+        from dataclasses import replace
+
+        self.controller.toggle_negative_peek(force=True)
+        seen: list = []
+        self.controller.negative_peek_changed.connect(seen.append)
+        exposure = replace(self.controller.state.config.exposure, density=self.controller.state.config.exposure.density + 0.1)
+        self.controller.state.config = replace(self.controller.state.config, exposure=exposure)
+        with patch.object(self.controller, "_dispatch_pending_render"):
+            self.controller.request_render()
+        self.assertFalse(self.controller.state.negative_peek)
+        self.assertEqual(seen, [False])
+
+    def test_the_crop_tool_keeps_the_negative_peek_until_a_drag_is_released(self):
+        from negpy.desktop.session import ToolMode
+
+        self._track_config()
+        self.controller.toggle_negative_peek(force=True)
+        with patch.object(self.controller, "_dispatch_pending_render"):
+            self.controller.set_active_tool(ToolMode.CROP_MANUAL)
+            self.assertTrue(self.controller.state.negative_peek)
+            self.controller.handle_crop_rect_changed(0.2, 0.2, 0.8, 0.8, False)
+            self.controller.request_render()
+            self.assertTrue(self.controller.state.negative_peek)
+            self.controller.handle_crop_rect_changed(0.2, 0.2, 0.8, 0.8, True)
+            self.assertFalse(self.controller.state.negative_peek)
+
+            # Peeked again after the drag: closing the tool resets the bounds the crop changed.
+            self.controller.toggle_negative_peek(force=True)
+            self.controller.set_active_tool(ToolMode.NONE)
+        self.assertTrue(self.controller.state.negative_peek)
+
+    def test_a_rotation_drag_keeps_the_negative_peek_until_release(self):
+        from negpy.desktop.session import ToolMode
+
+        self._track_config()
+        self.controller.state.active_tool = ToolMode.CROP_MANUAL
+        self.controller.toggle_negative_peek(force=True)
+        with patch.object(self.controller, "_dispatch_pending_render"):
+            self.controller.handle_crop_rotation_changed(1.5, False)
+            self.controller.request_render()
+            self.assertTrue(self.controller.state.negative_peek)
+            self.controller.handle_crop_rotation_changed(1.5, True)
+        self.assertFalse(self.controller.state.negative_peek)
+
+    def test_a_geometry_edit_keeps_the_negative_peek(self):
+        from dataclasses import replace
+
+        self.controller.toggle_negative_peek(force=True)
+        geometry = replace(self.controller.state.config.geometry, fine_rotation=2.0, flip_horizontal=True)
+        self.controller.state.config = replace(self.controller.state.config, geometry=geometry)
+        with patch.object(self.controller, "_dispatch_pending_render"):
+            self.controller.request_render()
+        self.assertTrue(self.controller.state.negative_peek)
+
+    def test_reset_crop_keeps_the_negative_peek(self):
+        from dataclasses import replace
+
+        self._track_config()
+        geometry = replace(self.controller.state.config.geometry, crop_rect=(0.1, 0.1, 0.9, 0.9))
+        process = replace(self.controller.state.config.process, local_floors=(0.1, 0.2, 0.3), lock_bounds=False)
+        self.controller.state.config = replace(self.controller.state.config, geometry=geometry, process=process)
+        self.controller.toggle_negative_peek(force=True)
+        with patch.object(self.controller, "_dispatch_pending_render"):
+            self.controller.reset_crop()
+        self.assertTrue(self.controller.state.negative_peek)
+
+    def test_a_frozen_auto_crop_keeps_the_negative_peek(self):
+        from dataclasses import replace
+
+        from negpy.features.geometry.logic import autocrop_detection_key
+
+        self._track_config()
+        geometry = replace(self.controller.state.config.geometry, crop_from_auto=True, crop_rect=None)
+        self.controller.state.config = replace(self.controller.state.config, geometry=geometry)
+        self.controller.toggle_negative_peek(force=True)
+        metrics = {"autocrop_resolved_rect": (0.05, 0.04, 0.99, 0.98), "autocrop_resolved_key": autocrop_detection_key(geometry)}
+        self.controller._freeze_resolved_auto_crop(metrics)
+        with patch.object(self.controller, "_dispatch_pending_render"):
+            self.controller.request_render()
+        self.assertTrue(self.controller.state.negative_peek)
+
+    def test_an_export_or_metadata_edit_keeps_the_negative_peek(self):
+        from dataclasses import replace
+
+        self.controller.toggle_negative_peek(force=True)
+        config = self.controller.state.config
+        config = replace(config, export=replace(config.export, overwrite=not config.export.overwrite))
+        self.controller.state.config = replace(config, metadata=replace(config.metadata))
+        with patch.object(self.controller, "_dispatch_pending_render"):
+            self.controller.request_render()
+        self.assertTrue(self.controller.state.negative_peek)
+
+    def test_an_edit_leaves_the_flat_field_check_up(self):
+        from dataclasses import replace
+
+        self.controller.state.flatfield_peek = True
+        exposure = replace(self.controller.state.config.exposure, density=self.controller.state.config.exposure.density + 0.1)
+        self.controller.state.config = replace(self.controller.state.config, exposure=exposure)
+        with patch.object(self.controller, "_dispatch_pending_render"):
+            self.controller.request_render()
+        self.assertTrue(self.controller.state.flatfield_peek)
+
+    def test_rewriting_a_section_with_equal_values_keeps_the_negative_peek(self):
+        from dataclasses import replace
+
+        self.controller.toggle_negative_peek(force=True)
+        self.controller.state.config = replace(self.controller.state.config, exposure=replace(self.controller.state.config.exposure))
+        with patch.object(self.controller, "_dispatch_pending_render"):
+            self.controller.request_render()
+        self.assertTrue(self.controller.state.negative_peek)
+
+    def test_rerender_active_view_ends_the_negative_peek(self):
         import numpy as np
 
         self.controller.state.preview_raw = np.zeros((8, 8, 3), dtype=np.float32)
-        self.controller.state.negative_peek = True
+        self.controller.toggle_negative_peek(force=True)
         with patch.object(self.controller, "request_render") as rr:
             self.controller.rerender_active_view()
-        # A geometry op must not drop the peek, and the peek is not a render.
-        rr.assert_not_called()
-        self.assertTrue(self.controller.state.negative_peek)
-        self.assertIn("base_positive", self.controller.state.peek_frame)
+        rr.assert_called_once_with()
+        self.assertFalse(self.controller.state.negative_peek)
 
 
 class TestClearThumbnailCache(unittest.TestCase):

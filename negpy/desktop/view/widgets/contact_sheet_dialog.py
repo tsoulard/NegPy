@@ -430,6 +430,14 @@ class ContactSheetDialog(QDialog):
         self.proof_label.setWordWrap(True)
         col.addWidget(self.proof_label)
 
+        self.pick_btn = tool_toggle(
+            "fa5s.times-circle",
+            "Pick Frames",
+            "Show every frame; click one to leave it out or put it back. Rejected frames start left out",
+        )
+        self.pick_btn.toggled.connect(lambda _checked: self._schedule_render())
+        col.addWidget(self.pick_btn)
+
         toggles = QHBoxLayout()
         toggles.setSpacing(THEME.space_md)
         self.edge_btn = labeled_toggle(
@@ -450,17 +458,21 @@ class ContactSheetDialog(QDialog):
             "fa5s.print", " White Paper", settings.white_paper, "Print on white paper with dark labels, to save ink on a home printer"
         )
         self.white_btn.toggled.connect(lambda _checked: self._schedule_render())
+        self.film_base_btn = labeled_toggle(
+            "fa5s.film",
+            " Film Base",
+            settings.film_base,
+            "Print the film base black, as a darkroom contact print. Off prints it as paper, with the strip outlined, the "
+            "edge print and frame numbers in dark ink and the perforations as rings, so a home printer inks the frames, "
+            "the markings, the outline and the rings alone",
+        )
+        self.film_base_btn.setEnabled(self.white_btn.isChecked())
+        self.white_btn.toggled.connect(self.film_base_btn.setEnabled)
+        self.film_base_btn.toggled.connect(lambda _checked: self._schedule_render())
         second = QHBoxLayout()
         second.setSpacing(THEME.space_md)
         second.addWidget(self.white_btn, 1)
-
-        self.pick_btn = tool_toggle(
-            "fa5s.times-circle",
-            "Pick Frames",
-            "Show every frame; click one to leave it out or put it back. Rejected frames start left out",
-        )
-        self.pick_btn.toggled.connect(lambda _checked: self._schedule_render())
-        second.addWidget(self.pick_btn, 1)
+        second.addWidget(self.film_base_btn, 1)
         col.addLayout(second)
 
         self.summary_label = hint_label()
@@ -762,6 +774,7 @@ class ContactSheetDialog(QDialog):
             self.edge_btn.isChecked(),
             self.order_btn.currentIndex() == _BY_SCENE,
             self.white_btn.isChecked(),
+            self.film_base_btn.isChecked(),
         )
 
     def kept_frames(self) -> tuple[SheetFrame, ...]:
@@ -784,4 +797,10 @@ class ContactSheetDialog(QDialog):
 
     def look(self) -> SheetLook:
         edge = replace(self._look.edge, printed=self.edge_btn.isChecked())
-        return replace(self._look, edge=edge, label=self._label_text if self._label_on() else "", white_paper=self.white_btn.isChecked())
+        return replace(
+            self._look,
+            edge=edge,
+            label=self._label_text if self._label_on() else "",
+            white_paper=self.white_btn.isChecked(),
+            film_base=self.film_base_btn.isChecked(),
+        )

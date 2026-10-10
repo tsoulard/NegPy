@@ -20,7 +20,7 @@ QUICK = "quick"
 _COMMENT_PREFIX = "negpy-thumb:"
 
 # Sections that never reach the pixels; every other section counts as shaping the thumbnail.
-_NON_PIXEL_SECTIONS = frozenset({"metadata", "export"})
+NON_PIXEL_SECTIONS = frozenset({"metadata", "export"})
 
 # Fields left out of a hashed section: export-only, labels, and detail too fine for a thumbnail.
 _UNHASHED_FIELDS: dict[str, frozenset[str]] = {
@@ -77,7 +77,7 @@ def thumbnail_fingerprint(
     """
     sections = {}
     for f in fields(config):
-        if f.name in _NON_PIXEL_SECTIONS or f.name in _BELOW_THUMBNAIL_SECTIONS:
+        if f.name in NON_PIXEL_SECTIONS or f.name in _BELOW_THUMBNAIL_SECTIONS:
             continue
         sections[f.name] = _changed_fields(getattr(config, f.name), _UNHASHED_FIELDS.get(f.name, frozenset()))
     payload = {

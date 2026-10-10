@@ -363,3 +363,17 @@ def test_baseline_hint_names_where_the_bounds_came_from(qapp):
     controller.state.config = replace(cfg, process=replace(cfg.process, use_color_average=True))
     sidebar.sync_ui()
     assert sidebar.baseline_source_hint.text().startswith("No baseline yet")
+
+
+def test_the_clipping_hint_reads_as_the_analysis_row_does():
+    _controller, sidebar = _sidebar()
+
+    sidebar.set_clipping(0.003, 0.012)
+    assert sidebar.clipping_hint.text() == "Clipping: Sh 0.3% · Hi 1.2%"
+    assert sidebar.clipping_hint.property("hint") == "warning"  # the 1% rule the stats row applies
+
+    sidebar.set_clipping(0.0, 0.0)
+    assert sidebar.clipping_hint.property("hint") == "muted"
+
+    sidebar.set_clipping(None, None)
+    assert sidebar.clipping_hint.text() == "Clipping: —"

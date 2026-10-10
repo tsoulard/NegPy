@@ -190,6 +190,7 @@ from negpy.features.process.models import (
 from negpy.desktop.settings_catalog import BOUNDS_INPUT_FIELDS, FRAME_CARD_FIELDS, frame_card_rows, section_of_field, selected_flat_dict
 from negpy.services.assets.thumbnails import asset_thumbnail_key
 from negpy.services.assets.thumbnail_fingerprint import (
+    NON_PIXEL_SECTIONS,
     QUICK as THUMB_QUICK,
     decode_comment,
     is_current as thumbnail_is_current,
@@ -337,6 +338,24 @@ class _DiscoveryRequest:
     hot_folder: bool = False
 
 
+# Sections a scan peek shows itself or that never reach the pixels; an edit to any other section ends the peek.
+_PEEK_SHOWN_SECTIONS = NON_PIXEL_SECTIONS | {"geometry"}
+
+
+def _peek_hidden_sections(config: WorkspaceConfig) -> tuple:
+    return tuple(getattr(config, f.name) for f in fields(config) if f.name not in _PEEK_SHOWN_SECTIONS)
+
+
+def _same_section(a: Any, b: Any) -> bool:
+    """Identity first: a section that holds an array has no truth value for ==."""
+    if a is b:
+        return True
+    try:
+        return bool(a == b)
+    except (ValueError, TypeError):
+        return False
+
+
 def baseline_compare_config(config: WorkspaceConfig) -> WorkspaceConfig:
     """
     The 'before' config for the before/after view: reset the creative sections to defaults
@@ -430,7 +449,7 @@ class AppController(QObject):
     # pooled texture directly and must drop it first.
     gpu_textures_released = pyqtSignal()
     export_progress = pyqtSignal(int, int, str)
-    export_finished = pyqtSignal(float, int)
+    export_finished = pyqtSignal(float, list)  # elapsed seconds, the failed files' messages
     render_requested = pyqtSignal(RenderTask)
     preview_load_requested = pyqtSignal(PreviewLoadTask)
     prefetch_load_requested = pyqtSignal(PreviewLoadTask)
@@ -566,7 +585,9 @@ class AppController(QObject):
         self._measured_half_rows: set[str] = set()
         self._first_render_t0: Optional[float] = None
         self._export_start_time = 0.0
-        self._export_failures = 0
+        self._export_errors: list[str] = []
+        # (roll id, pushing frame, pushed cards, their roll fields before the push)
+        self._roll_push_undo: Optional[tuple] = None
         self._frame_merge_trash = True
         self._discovery_running = False
         self._auto_open_after_discovery = False
@@ -736,6 +757,7 @@ class AppController(QObject):
         self._dispatched_render_state: Optional[tuple] = None  # _render_state() of the last plain render
 
         self._crop_bounds_dirty = False
+        self._peek_sections: Optional[tuple] = None  # _peek_hidden_sections() when a scan peek opened; a render of others ends it
         self._keystone_lines: Dict[str, Tuple[Tuple[float, float], Tuple[float, float]]] = {}
         self._zone_preview_shown = False
         self._pin_dragging = False
@@ -1267,7 +1289,7 @@ class AppController(QObject):
             return  # a keyword search's own walk landed here; nothing to index
         if self._library_index_cancelled:
             self._end_batch("library_index")
-            self.set_status("Indexing cancelled", 3000)
+            self.set_status("Indexing canceled", 3000)
             return
         hashes = [f["hash"] for f in files]
         cached = self.session.repo.load_embeddings_for(hashes, semantic_model.MODEL_VERSION)
@@ -3053,9 +3075,11 @@ class AppController(QObject):
             self.clear_zone_pins()
         if leaving_crop and self._crop_bounds_dirty:
             # Recompute bounds once now the final crop is committed.
+            before = self.state.config
             new_proc = replace(self.state.config.process, **invalidate_local_bounds(self.state.config.process))
             self.session.update_config(replace(self.state.config, process=new_proc), render=False)
             self._crop_bounds_dirty = False
+            self._carry_peek(before)
         if preview_mode_changed:
             if leaving_crop:
                 # Same spinner treatment as an initial file load: the bounds recompute and
@@ -3536,7 +3560,7 @@ class AppController(QObject):
         self._render_debounce.stop()
         self.session.update_config(replace(self.state.config, geometry=new_geo), persist=persist, render=persist)
         if persist:
-            self._reset_all_peeks()
+            self.reset_all_peeks()
             self.request_render()
 
     def handle_crop_rotation_changed(self, angle: float, persist: bool) -> None:
@@ -3552,6 +3576,7 @@ class AppController(QObject):
         self.session.update_config(replace(self.state.config, geometry=new_geo), persist=persist)
         self.rotation_guide_requested.emit()
         if persist:
+            self.reset_all_peeks()
             self.request_render()
         else:
             self._render_debounce.start()
@@ -3569,7 +3594,7 @@ class AppController(QObject):
         self.session.update_config(replace(self.state.config, geometry=new_geo), persist=True)
         self.rotation_guide_requested.emit()
         self.set_active_tool(ToolMode.NONE)
-        self._reset_all_peeks()
+        self.reset_all_peeks()
         self.request_render()
 
     def auto_skew_frame(self) -> None:
@@ -3662,10 +3687,10 @@ class AppController(QObject):
         self._keystone_lines = {}
         self.keystone_lines_cleared.emit()
         self.rotation_guide_requested.emit()
-        self._reset_all_peeks()
+        self.reset_all_peeks()
         self.request_render()
 
-    def _reset_all_peeks(self) -> None:
+    def reset_all_peeks(self) -> None:
         if self.state.flat_peek:
             self.state.flat_peek = False
             self.flat_peek_changed.emit(False)
@@ -3761,6 +3786,7 @@ class AppController(QObject):
 
     def reset_crop(self) -> None:
         self._crop_bounds_dirty = False
+        before = self.state.config
         new_proc = replace(self.state.config.process, **invalidate_local_bounds(self.state.config.process))
         self.session.update_config(
             replace(
@@ -3770,6 +3796,7 @@ class AppController(QObject):
             ),
             persist=True,
         )
+        self._carry_peek(before)
         self._render_crop_change()
 
     def _render_crop_change(self) -> None:
@@ -3789,6 +3816,7 @@ class AppController(QObject):
             self.state.active_tool = ToolMode.NONE
             self.tool_sync_requested.emit()
         self._crop_bounds_dirty = False
+        before = self.state.config
         new_proc = replace(self.state.config.process, **invalidate_local_bounds(self.state.config.process))
         self.session.update_config(
             replace(
@@ -3802,6 +3830,7 @@ class AppController(QObject):
             ),
             persist=True,
         )
+        self._carry_peek(before)
         self._render_crop_change()
 
     def _config_for_batch_asset(self, asset: dict) -> WorkspaceConfig:
@@ -3847,7 +3876,7 @@ class AppController(QObject):
         self._autocrop_dispatched = len(frames)
         self._autocrop_preflight_skipped = preflight_skipped
         self._autocrop_cancel_requested = False
-        self.set_status(f"Auto cropping {count_of(len(frames), 'frame')}...")
+        self.set_status(f"Auto cropping {count_of(len(frames), 'frame')}…")
         self.batch_autocrop_requested.emit(
             BatchAutoCropTask(
                 frames=frames,
@@ -3904,7 +3933,9 @@ class AppController(QObject):
                     new_process = replace(latest.process, **invalidate_local_bounds(latest.process))
                     updated = replace(latest, geometry=new_geometry, process=new_process)
                     if asset.get("hash") == self.state.current_file_hash:
+                        before = self.state.config
                         self.session.persist_active_batch_config(updated)
+                        self._carry_peek(before)
                         active_changed = True
                     else:
                         self.session.repo.save_file_settings(asset["hash"], updated, file_path=asset["path"])
@@ -4109,7 +4140,7 @@ class AppController(QObject):
         self._thumbnail_render_timing = [0.0, 0.0, 0]
         self._thumbnail_render_pending = {f.file_info.get("hash") for f in frames}
         self.thumbnail_refresh_state_changed.emit(True)
-        self.set_status(f"Updating {count_of(len(frames), 'thumbnail')}...")
+        self.set_status(f"Updating {count_of(len(frames), 'thumbnail')}…")
         self.status_progress_requested.emit(0, len(frames))
         self.thumbnail_render_requested.emit(
             ThumbnailRenderTask(
@@ -4173,7 +4204,7 @@ class AppController(QObject):
             # routine path's resume, and say so — this one the user did ask for.
             self._thumbnail_render_user_cancelled = False
             self._thumbnail_render_resume.clear()
-            self.set_status("Thumbnail update cancelled", 3000)
+            self.set_status("Thumbnail update canceled", 3000)
             self._finish_thumbnail_render_generation()
             return
         # Fires whenever real batch work pre-empts a running refresh, which is routine
@@ -4229,6 +4260,7 @@ class AppController(QObject):
         if new_ratio == geom.autocrop_ratio:
             return
 
+        before = self.state.config
         new_proc = replace(self.state.config.process, **invalidate_local_bounds(self.state.config.process))
         self.session.update_config(
             replace(
@@ -4239,6 +4271,7 @@ class AppController(QObject):
             persist=True,
             render=False,
         )
+        self._carry_peek(before)
         self._lock_roll_card("autocrop")
         # Emit manually so UI syncs (combo dropdown updates), but without triggering
         # a render via the state_changed debounce.
@@ -4836,7 +4869,7 @@ class AppController(QObject):
         Updates UI status during Roll or Scene Analysis.
         """
         marker = "cropped" if has_crop else "full frame"
-        self.set_status(f"Analyzing {current}/{total}: {name} [{marker}]...")
+        self.set_status(f"Analyzing {current}/{total}: {name} [{marker}]…")
         self.status_progress_requested.emit(current, total)
         self.batch_progress.emit(current, total, f"{name} [{marker}]")
 
@@ -5208,23 +5241,56 @@ class AppController(QObject):
 
     def _push_cards_to_roll(self, pushed: List[str]) -> int:
         roll_id = self.state.active_roll_id
-        if roll_id is None:
+        if roll_id is None or not pushed:
             self.set_status(_NOTHING_TO_APPLY, 2500)
             return 0
-        active_hash = self.state.current_file_hash
+        repo = self.session.repo
+        frame_hash = rolls.unforked_hash(self.state.current_file_hash)
+        # Only the fields this push writes, so an undo leaves every later roll default alone.
+        names = {name for card in pushed for name in rolls.card_fields(card)}
+        if "film" in pushed:
+            names.add("cast_removal_strength")
+        self._roll_push_undo = (roll_id, frame_hash, tuple(pushed), rolls.roll_fields_snapshot(repo, roll_id, names))
         if "film" in pushed and "cast_removal" not in pushed:
             self._carry_roll_cast_removal(roll_id, self.state.config.process.process_mode)
         for card_key in pushed:
-            rolls.set_roll_defaults(self.session.repo, roll_id, **self._card_values(self.state.config, card_key))
-            rolls.set_frame_override(self.session.repo, roll_id, rolls.unforked_hash(active_hash), card_key, False)
+            rolls.set_roll_defaults(repo, roll_id, **self._card_values(self.state.config, card_key))
+            rolls.set_frame_override(repo, roll_id, frame_hash, card_key, False)
+        self._roll_defaults_changed(roll_id, set(pushed))
+        self.set_status(f"Applied to the roll: {self._roll_card_names(pushed)}", 3000)
+        return len(set(pushed))
 
-        touched = set(pushed)
-        if not touched:
-            self.set_status(_NOTHING_TO_APPLY, 2500)
-            return 0
+    def can_undo_roll_push(self, cards=None) -> bool:
+        """Only on the frame that pushed, while the roll is open: elsewhere the live config
+        holds the pushed values, and the undo would leave it stale. With *cards*, only when
+        the last push included one of them."""
+        undo = self._roll_push_undo
+        if not undo or undo[0] != self.state.active_roll_id or undo[1] != rolls.unforked_hash(self.state.current_file_hash or ""):
+            return False
+        return cards is None or bool(set(cards) & set(undo[2]))
+
+    def undo_roll_push(self) -> None:
+        if not self.can_undo_roll_push():
+            self.set_status("Nothing to undo — no Apply to Roll from this frame", 2500)
+            return
+        roll_id, frame_hash, pushed, snapshot = self._roll_push_undo
+        self._roll_push_undo = None
+        rolls.restore_roll_fields(self.session.repo, roll_id, snapshot)
+        # A push only ever moves cards this frame had locked.
+        for card_key in pushed:
+            rolls.set_frame_override(self.session.repo, roll_id, frame_hash, card_key, True)
+        self._roll_defaults_changed(roll_id, set(pushed))
+        self.set_status(f"Undid Apply to Roll: {self._roll_card_names(pushed)}", 3000)
+
+    def _roll_card_names(self, cards) -> str:
+        return ", ".join(dict.fromkeys(self._ROLL_CARD_LABELS[k] for k in self._ROLL_CARDS if k in cards))
+
+    def _roll_defaults_changed(self, roll_id: str, touched: set) -> None:
+        """Every other frame that follows the roll on a touched card shows a new look."""
         # Metadata cards do not reach the pixels. A frame locked on every other touched
         # card keeps its own values, so its thumbnail holds.
         rendered = {k for k in touched if rolls.ROLL_DEFAULT_FIELDS[k][0] != "metadata"}
+        active_hash = self.state.current_file_hash
         changed_hashes = []
         for f in self.state.uploaded_files:
             file_hash = f.get("hash")
@@ -5238,9 +5304,6 @@ class AppController(QObject):
         self.config_updated.emit()
         if changed_hashes:
             self.session.frames_edited_offscreen.emit(changed_hashes)
-        names = ", ".join(dict.fromkeys(self._ROLL_CARD_LABELS[k] for k in self._ROLL_CARDS if k in touched))
-        self.set_status(f"Applied to the roll: {names}", 3000)
-        return len(touched)
 
     def _carry_roll_cast_removal(self, roll_id: str, mode: str) -> None:
         """A Film Mode pushed to the roll moves the roll's Cast Removal the way
@@ -6453,11 +6516,13 @@ class AppController(QObject):
             self.load_file(self.state.current_file_path, preserve_zoom=True)
             return
 
-        # A plain render paints the edit over the flat peek, so it ends the peek. The other
-        # peeks repaint over a render; edits drop them through _reset_all_peeks.
+        # A plain render paints the edit over the flat peek, so it ends the peek. The scan
+        # peeks repaint over a render, so only an edit since they opened ends them.
         if config_override is None and self.state.flat_peek:
             self.state.flat_peek = False
             self.flat_peek_changed.emit(False)
+        if config_override is None and (self.state.negative_peek or self.state.embedded_peek) and not self._peek_shows(self.state.config):
+            self.reset_all_peeks()
 
         # The strip's patches were printed from the config as it stood, so once the edit
         # moves they prove something else. Drop them, which also cancels a strip still
@@ -6613,17 +6678,15 @@ class AppController(QObject):
             self._request_compare_baseline()
 
     def rerender_active_view(self) -> None:
-        """Re-render the canvas keeping whatever comparison overlay is active.
+        """Re-render the canvas after a rotate or flip, keeping the flat peek and the compare split.
 
-        Geometry ops (rotate/flip) change the config but shouldn't kick the user
-        out of flat-peek; a plain request_render() would exit it. The compare split
-        survives a plain render, and its baseline half re-captures on the key change.
+        A plain request_render() would exit the flat peek. The compare split survives a plain
+        render, and its baseline half re-captures on the key change. A scan peek ends here, as
+        on every committed rotation.
         """
-        if self.state.negative_peek:
-            self._paint_negative_peek()
-        elif self.state.embedded_peek:
-            self._paint_embedded_peek()
-        elif self.state.flatfield_peek:
+        if self.state.negative_peek or self.state.embedded_peek:
+            self.reset_all_peeks()
+        if self.state.flatfield_peek:
             self._paint_flatfield_peek()
         elif self.state.flat_peek:
             self.request_render(readback_metrics=False, config_override=flat_master_config(self.state.config))
@@ -6781,6 +6844,7 @@ class AppController(QObject):
             self._clear_test_strip()
 
         self.state.negative_peek = target
+        self._peek_sections = _peek_hidden_sections(self.state.config)
         self.negative_peek_changed.emit(target)
 
         if target:
@@ -6884,6 +6948,7 @@ class AppController(QObject):
             self._clear_test_strip()
 
         self.state.embedded_peek = target
+        self._peek_sections = _peek_hidden_sections(self.state.config)
         self.embedded_peek_changed.emit(target)
 
         if target:
@@ -7189,7 +7254,7 @@ class AppController(QObject):
         tasks = self._linear_output_tasks(supported, export_path)
 
         self._export_start_time = time.time()
-        self._export_failures = 0
+        self._export_errors = []
         if self._begin_batch("export", "Exporting Linear Output", abortable=True) is None:
             return
         QMetaObject.invokeMethod(
@@ -7495,7 +7560,7 @@ class AppController(QObject):
 
         presets = self._enabled_presets()
         if not presets:
-            QMessageBox.information(None, "No Presets Enabled", "Enable at least one export preset in the Export panel.")
+            QMessageBox.information(None, "Export", "Enable at least one export preset in the Export panel.")
             return
 
         if not self._validate_preset_paths(presets):
@@ -7654,7 +7719,7 @@ class AppController(QObject):
             breaks=dialog.breaks(),
         )
         self._export_start_time = time.time()
-        self._export_failures = 0
+        self._export_errors = []
         self._contact_sheet_folder = ""
         if self._begin_batch("contact_sheet", "Contact sheet", abortable=True) is None:
             return
@@ -7732,7 +7797,7 @@ class AppController(QObject):
             return
 
         self._export_start_time = time.time()
-        self._export_failures = 0
+        self._export_errors = []
         if self._begin_batch("export", "Exporting", abortable=True) is None:
             return
         QMetaObject.invokeMethod(
@@ -7967,6 +8032,16 @@ class AppController(QObject):
             identity = self.state.last_metrics.get("render_identity")
             if isinstance(identity, tuple) and identity[0] == self.state.current_file_hash and identity[1] is before:
                 self.state.last_metrics["render_identity"] = (identity[0], self.state.config)
+        self._carry_peek(before)
+
+    def _peek_shows(self, config: WorkspaceConfig) -> bool:
+        shown = self._peek_sections
+        return shown is not None and all(_same_section(a, b) for a, b in zip(shown, _peek_hidden_sections(config)))
+
+    def _carry_peek(self, before: WorkspaceConfig) -> None:
+        """Call after a write that is not an edit of its own, so a scan peek open on `before` stays up."""
+        if self._peek_shows(before):
+            self._peek_sections = _peek_hidden_sections(self.state.config)
 
     def _dispatch_pending_render(self) -> None:
         """Start the render queued while the last one was running, if any."""
@@ -8082,7 +8157,7 @@ class AppController(QObject):
         self.set_status(message, 6000, kind="warning")
 
     def _on_export_task_error(self, message: str) -> None:
-        self._export_failures += 1
+        self._export_errors.append(message)
         self._report_worker_error("Export", message)
 
     def _report_worker_error(self, source: str, message: str) -> None:
@@ -8102,9 +8177,9 @@ class AppController(QObject):
         elapsed = time.time() - self._export_start_time
         owner = self._active_batch if self._active_batch in ("export", "contact_sheet") else "export"
         self._end_batch(owner)
-        self.export_finished.emit(elapsed, self._export_failures)
+        self.export_finished.emit(elapsed, list(self._export_errors))
         if owner == "contact_sheet" and self._contact_sheet_folder:
-            failed = f" — {count_of(self._export_failures, 'frame')} failed" if self._export_failures else ""
+            failed = f" — {count_of(len(self._export_errors), 'frame')} failed" if self._export_errors else ""
             self.set_status(f"Contact sheet saved to {self._contact_sheet_folder}{failed}", 6000, kind="warning" if failed else "info")
             self._contact_sheet_folder = ""
         self._update_thumbnail_from_state()

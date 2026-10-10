@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
 
 from negpy.kernel.system.text import count_of, plural
 from negpy.desktop.converters import ImageConverter
-from negpy.desktop.view.styles.templates import EditedDot, StatusStrip, pin_dialog_default
+from negpy.desktop.view.styles.templates import EditedDot, StatusStrip, header_button, pin_dialog_default
 from negpy.desktop.view.styles.theme import THEME
 from negpy.desktop.view.widgets.dialog_geometry import remember_dialog_geometry
 from negpy.desktop.view.widgets.scan_preview_common import RollPreviewSignalsMixin, preview_positive
@@ -233,10 +233,7 @@ class StripPreviewDialog(RollPreviewSignalsMixin, QDialog):
         self.help_lbl.setStyleSheet(f"color: {THEME.text_secondary}; font-size: {THEME.font_size_small}px;")
         help_row.addWidget(self.help_lbl)
         help_row.addStretch()
-        self.help_btn = QPushButton(qta.icon("fa5s.info-circle", color=THEME.text_muted), "")
-        self.help_btn.setToolTip("Offset, Drift and cropping, in full")
-        self.help_btn.setFlat(True)
-        self.help_btn.setFixedSize(24, 22)
+        self.help_btn = header_button(qta.icon("fa5s.info-circle", color=THEME.text_muted), "Offset, Drift and cropping, in full")
         self.help_btn.setVisible(has_guide(_GUIDE_KEY))
         self.help_btn.clicked.connect(lambda: SectionHelpDialog(_GUIDE_KEY, "Strip preview", self, repo=self._repo).exec())
         help_row.addWidget(self.help_btn)
@@ -439,10 +436,7 @@ class StripPreviewDialog(RollPreviewSignalsMixin, QDialog):
         checkbox.setChecked(checked)
         checkbox.setToolTip(f"Scan frame {frame}")
         oh.addWidget(checkbox)
-        preview_btn = QPushButton(qta.icon("fa5s.eye", color=THEME.text_secondary), "")
-        preview_btn.setToolTip(f"Preview frame {frame}")
-        preview_btn.setFlat(True)
-        preview_btn.setFixedSize(24, 20)
+        preview_btn = header_button(qta.icon("fa5s.eye", color=THEME.text_secondary), f"Preview frame {frame}")
         preview_btn.clicked.connect(lambda _checked=False, f=frame: self._on_preview_one(f))
         preview_btn.setVisible(not self._caps.strip_pass)
         oh.addWidget(preview_btn)
@@ -888,4 +882,4 @@ class StripPreviewDialog(RollPreviewSignalsMixin, QDialog):
             return
         self._previewing = False
         self._set_previewing(False)
-        self.status_strip.set_message("Preview cancelled.")
+        self.status_strip.set_message("Preview canceled")

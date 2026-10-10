@@ -1329,7 +1329,7 @@ def test_crop_ratio_choices_has_no_reciprocal_duplicates():
 
 def test_crop_ratio_choices_covers_common_print_and_screen_sizes():
     values = {r.value for r in CROP_RATIO_CHOICES}
-    for expected in ("7:5", "16:9", "16:10", "8.5:11"):
+    for expected in ("7:5", "16:9", "16:10", "8.5:11", "1:1.4142"):
         assert expected in values
 
 
@@ -1345,6 +1345,7 @@ def test_canonical_crop_ratio_maps_portrait_forms_to_the_picker_entry():
         ("9:16", "16:9"),
         ("10:16", "16:10"),
         ("11:8.5", "8.5:11"),
+        ("1.4142:1", "1:1.4142"),
     ):
         assert canonical_crop_ratio(hidden) == canonical
         assert canonical in choice_values

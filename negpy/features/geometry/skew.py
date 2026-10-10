@@ -33,12 +33,16 @@ _ANGLE_BIN = 0.05
 # Sprocket holes, edge print and most picture detail run shorter than this.
 _MIN_SEGMENT = 0.04
 _MIN_LINE_SPAN = 0.25
-_MAX_LINE_RMS = 1.2
+# Admits the bow a scanning lens or film curl puts on a frame edge; its chord stays level.
+_MAX_LINE_RMS = 2.0
 _MIN_INLIER_FRACTION = 0.5
 # A line that disagrees with the rest by more than this after the solve is not the frame.
 _MAX_LINE_RESIDUAL = 0.15
 # Opposite edges this close together cannot separate keystone from noise.
 _MIN_PAIR_SEPARATION = 0.3
+# A box bounds its edge to within the film detector's snap window (`_snap_film_bounds_to_bed_gradient`).
+_BOX_TOLERANCE = 0.02
+_BOX_TOLERANCE_PX = 16
 # A tight scan's border lines sit within this fraction of the cross extent from the canvas edge.
 _CANVAS_EDGE_BAND = 0.12
 # Film base or bed outside a border never reads this dark; an opaque holder does.
@@ -153,12 +157,13 @@ def _ransac_line(xs: np.ndarray, ys: np.ndarray, expected: float, half: float, s
     return np.polyfit(xs[inlier[best]], ys[inlier[best]], 1)
 
 
-def _fit_side(lum: np.ndarray, horizontal: bool, at: float, start: float, stop: float, source: str) -> EdgeLine | None:
-    """Fit the edge running along one axis near `at`, between `start` and `stop`."""
+def _fit_side(lum: np.ndarray, horizontal: bool, at: float, start: float, stop: float, source: str, outward: int = 0) -> EdgeLine | None:
+    """Fit the edge running along one axis near `at`, between `start` and `stop`. `outward` is
+    the sign of the box's outside across the axis, or 0 when `at` is the edge itself."""
     img = lum if horizontal else lum.T
     h, w = img.shape
     length = stop - start
-    if length < _MIN_LINE_SPAN * w or at < 2 or at > h - 3:
+    if length < _MIN_LINE_SPAN * w or not _off_border(at, at, h):
         return None
     stations = np.linspace(start + 0.1 * length, stop - 0.1 * length, int(min(240, max(24, length / 4))))
 
@@ -178,13 +183,17 @@ def _fit_side(lum: np.ndarray, horizontal: bool, at: float, start: float, stop: 
             ys.extend(lo + peaks)
         return np.asarray(xs), np.asarray(ys)
 
-    # Wide enough for an edge that keystone leaves a degree or two off the box.
-    wide = max(10.0, 0.035 * max(h, w))
-    xs, ys = sample(np.full(stations.size, float(at)), wide, nearest=False)
-    fit = _ransac_line(xs, ys, float(at), wide, length)
+    # Keystone leaves the far end of an edge a degree or two inside the box; a stronger edge
+    # outside it (the holder, the next frame) sits past the detector's error.
+    inside = max(10.0, 0.035 * max(h, w))
+    outside = inside if outward == 0 else max(float(_BOX_TOLERANCE_PX), _BOX_TOLERANCE * h)
+    center = float(at) + 0.5 * outward * (outside - inside)
+    half = 0.5 * (inside + outside)
+    xs, ys = sample(np.full(stations.size, center), half, nearest=False)
+    fit = _ransac_line(xs, ys, float(at), half, length)
     if fit is None:
         return None
-    xs, ys = sample(np.polyval(fit, stations), max(6.0, 0.3 * wide), nearest=True)
+    xs, ys = sample(np.polyval(fit, stations), max(6.0, 0.3 * inside), nearest=True)
     if xs.size < 12:
         return None
     keep = np.ones(xs.size, bool)
@@ -208,6 +217,11 @@ def _fit_side(lum: np.ndarray, horizontal: bool, at: float, start: float, stop: 
     return EdgeLine(p1, p2, horizontal, source, inliers, rms)
 
 
+def _off_border(lo: float, hi: float, extent: int) -> bool:
+    """Whether the sides at `lo` and `hi` both sit inside the canvas, off its border."""
+    return lo >= 2 and hi <= extent - 3
+
+
 def _unrotate(line: EdgeLine, angle: float, w: int, h: int) -> EdgeLine:
     """Map a line found on the image turned by `angle` back to the unturned image."""
     m = np.vstack([cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle, 1.0), [0.0, 0.0, 1.0]])
@@ -225,21 +239,29 @@ def _frame_lines(lum: np.ndarray, rotated: np.ndarray) -> list[EdgeLine]:
     boxes: list[tuple[str, tuple[int, int, int, int]]] = []
     if film.roi is not None:
         boxes.append(("film", film.roi))
-        gate, _, _ = _refine_roi_to_image(rotated, film.roi)
-        if gate != film.roi:
-            boxes.append(("gate", gate))
+    # A slide shows no film edge to the detector (black rebate on a dark bed), but its picture
+    # box is still found from the canvas.
+    outer = film.roi if film.roi is not None else (0, rotated.shape[0], 0, rotated.shape[1])
+    gate, _, _ = _refine_roi_to_image(rotated, outer)
+    if gate != outer:
+        boxes.append(("gate", gate))
+    h, w = lum.shape
     lines: list[EdgeLine] = []
     seen: list[tuple[bool, float]] = []
     for source, (y1, y2, x1, x2) in boxes:
-        for horizontal, at, start, stop, side in (
-            (True, y1, x1, x2, "top"),
-            (True, y2, x1, x2, "bottom"),
-            (False, x1, y1, y2, "left"),
-            (False, x2, y1, y2, "right"),
+        # Film edges come in pairs. A side on the canvas border is a strip that runs past the
+        # capture, and the holder or the next frame bounds the other side of that axis.
+        rows = source != "film" or _off_border(y1, y2, h)
+        cols = source != "film" or _off_border(x1, x2, w)
+        for horizontal, at, start, stop, side, outward, fit in (
+            (True, y1, x1, x2, "top", -1, rows),
+            (True, y2, x1, x2, "bottom", 1, rows),
+            (False, x1, y1, y2, "left", -1, cols),
+            (False, x2, y1, y2, "right", 1, cols),
         ):
-            if any(o == horizontal and abs(p - at) < 4 for o, p in seen):
+            if not fit or any(o == horizontal and abs(p - at) < 4 for o, p in seen):
                 continue
-            line = _fit_side(lum, horizontal, float(at), float(start), float(stop), f"{source}-{side}")
+            line = _fit_side(lum, horizontal, float(at), float(start), float(stop), f"{source}-{side}", outward)
             if line is None:
                 continue
             # A film and a gate side can land on the same edge; count it once.

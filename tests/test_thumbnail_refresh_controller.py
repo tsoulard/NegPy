@@ -471,7 +471,7 @@ class TestThumbnailRefreshController:
         self.controller.cancel_thumbnail_refresh()
         self.controller._on_thumbnail_render_cancelled()
 
-        assert statuses == ["Thumbnail update cancelled"]
+        assert statuses == ["Thumbnail update canceled"]
 
     def test_cancel_thumbnail_refresh_also_discards_an_already_folded_backlog(self) -> None:
         """A bulk write folded into the resume backlog while a manual refresh was

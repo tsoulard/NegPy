@@ -12,6 +12,8 @@ from negpy.desktop.session import ToolMode
 from negpy.desktop.view.sidebar.base import BaseSidebar
 from negpy.desktop.view.sidebar.tone import _CH_COLORS, _CH_LABEL, _CH_SUFFIX
 from negpy.desktop.view.styles.templates import ICON_BUTTON_WIDTH, hint_label, header_row, section_subheader, set_hint_kind, wrap_tooltip
+from negpy.desktop.view.widgets.stats import CLIPPING_TOOLTIP
+from negpy.features.exposure.stats import clipping_row
 from negpy.services.assets import rolls
 from negpy.desktop.view.styles.theme import THEME
 from negpy.desktop.view.widgets.choice_button import ChoiceButton
@@ -77,6 +79,12 @@ class ProcessSidebar(BaseSidebar):
     Panel for core film processing, normalization, and roll management.
     """
 
+    def set_clipping(self, clip_low: float | None, clip_high: float | None) -> None:
+        """Show the print's shadow and highlight clipping shares: the Analysis stats' Clipping row."""
+        row = clipping_row(clip_low, clip_high)
+        self.clipping_hint.setText(f"{row.name}: {row.value}")
+        set_hint_kind(self.clipping_hint, "warning" if row.warn else "muted")
+
     def _init_ui(self) -> None:
         conf = self.state.config.process
 
@@ -141,6 +149,10 @@ class ProcessSidebar(BaseSidebar):
         self.lock_bounds_btn.setFixedWidth(ICON_BUTTON_WIDTH)
         self.analysis_header = section_subheader("ANALYSIS")
         analysis_col.addLayout(header_row(self.analysis_header, self.reanalyze_frame_btn, self.lock_bounds_btn))
+        self.clipping_hint = hint_label("")
+        self.clipping_hint.setToolTip(wrap_tooltip(CLIPPING_TOOLTIP))
+        analysis_col.addWidget(self.clipping_hint)
+        self.set_clipping(None, None)
         analysis_col.addWidget(self.analysis_buffer_slider)
 
         self.analysis_region_btn = self._tool_toggle(

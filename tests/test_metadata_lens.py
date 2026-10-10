@@ -44,6 +44,26 @@ def dng_file(tmp_path, data, **kwargs):
     return raw_file(tmp_path / "source.dng", [(51022, "B", len(data), data, False)], **kwargs)
 
 
+# DistortionInfo words of a DC-S1 + SIGMA 105mm F2.8 DG DN MACRO Art sample. The reader follows
+# darktable's Panasonic model (GPL-3.0+) and https://github.com/trou/panasonic-rw2.
+_RW2_SAMPLE_WORDS = (29475, -32031, 227, 629, 152, -614, 202, -13055, -888, 177, 344, 123, 3605, 677, -14365, 29981)
+
+
+def rw2_file(path, words, *, tag=0x0119, type_id=7, count=32, value_offset=22, byteorder="<"):
+    """A minimal Panasonic RW2: a non-TIFF header, one IFD0 entry, and the 16-word distortion block."""
+    magic = b"II\x55\x00" if byteorder == "<" else b"MM\x00\x55"
+    data = bytearray(magic)
+    data += struct.pack(byteorder + "I", 8)
+    data += struct.pack(byteorder + "H", 1)
+    data += struct.pack(byteorder + "H", tag)
+    data += struct.pack(byteorder + "H", type_id)
+    data += struct.pack(byteorder + "I", count)
+    data += struct.pack(byteorder + "I", value_offset)
+    data += struct.pack(byteorder + "16h", *words)
+    path.write_bytes(bytes(data))
+    return str(path)
+
+
 def test_dng_identity_and_separate_capabilities():
     assert parse_opcodes(opcode()) == ()
     ca = ((1.002, 0, 0, 0, 0, 0), IDENTITY, (0.998, 0, 0, 0, 0, 0))
@@ -148,6 +168,91 @@ def test_dng_does_not_reuse_inherited_sony_coefficients(tmp_path):
     data = (16, *([100] * 16))
     path = raw_file(tmp_path / "converted.dng", [(0x7037, "h", 17, data, False)])
     assert not read_lens_metadata(path).available
+
+
+def test_panasonic_sample_parses_the_distortion_polynomial(tmp_path):
+    lens = read_lens_metadata(rw2_file(tmp_path / "sample.rw2", _RW2_SAMPLE_WORDS))
+    assert lens.available
+    assert lens.source == "Panasonic RW2"
+    assert lens.distortion
+    assert not lens.ca
+    warp = lens.warps[0]
+    assert warp.scale == pytest.approx(1.0190956, abs=1e-6)
+    assert warp.a == pytest.approx(-0.027099609375, abs=1e-9)
+    assert warp.b == pytest.approx(0.004638671875, abs=1e-9)
+    assert warp.c == pytest.approx(0.003753662109375, abs=1e-9)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(byteorder=">"),
+        dict(count=16),
+        dict(type_id=3),
+        dict(tag=0x0100),
+        dict(value_offset=9999),
+    ],
+    ids=["big-endian", "wrong-count", "wrong-type", "no-distortion-tag", "offset-out-of-range"],
+)
+def test_panasonic_malformed_files_do_not_enable_correction(tmp_path, kwargs):
+    path = rw2_file(tmp_path / "bad.rw2", _RW2_SAMPLE_WORDS, **kwargs)
+    assert not read_lens_metadata(path).available
+
+
+def test_panasonic_flag_off_is_unavailable(tmp_path):
+    words = list(_RW2_SAMPLE_WORDS)
+    words[7] = 0x0102  # low nibble is 2, not 1
+    assert not read_lens_metadata(rw2_file(tmp_path / "off.rw2", tuple(words))).available
+
+
+def test_panasonic_truncated_file_is_unavailable(tmp_path):
+    path = tmp_path / "short.rw2"
+    rw2_file(path, _RW2_SAMPLE_WORDS)
+    path.write_bytes(path.read_bytes()[:30])  # the value offset lands past the truncated file
+    assert not read_lens_metadata(str(path)).available
+
+
+def test_panasonic_metadata_cache_tracks_file_revision(tmp_path):
+    path = tmp_path / "sample.rw2"
+    rw2_file(path, _RW2_SAMPLE_WORDS)
+    assert read_lens_metadata(str(path)).available
+    path.write_bytes(path.read_bytes()[:40])
+    assert not read_lens_metadata(str(path)).available
+
+
+def test_panasonic_forward_model_matches_the_sample(tmp_path):
+    warp = read_lens_metadata(rw2_file(tmp_path / "sample.rw2", _RW2_SAMPLE_WORDS)).warps[0]
+    scale, a, b, c = warp.scale, warp.a, warp.b, warp.c
+    # The reader's polynomial, evaluated at the source radius Rd, is the corrected radius Ru.
+    for rd, ratio in ((0.25, 0.99829), (0.5, 0.99345), (0.75, 0.98664), (1.0, 0.98094)):
+        ru = rd + scale * (a * rd**3 + b * rd**5 + c * rd**7)
+        assert ru / rd == pytest.approx(ratio, abs=5e-5)
+
+
+def test_panasonic_remap_maps_the_centre_to_itself_and_inverts_the_forward_model(tmp_path):
+    lens = read_lens_metadata(rw2_file(tmp_path / "sample.rw2", _RW2_SAMPLE_WORDS))
+    warp = lens.warps[0]
+    mx, my = warp.remap(lens, (200, 200, 3), 100, 101, 1, LensCorrections(True, True))
+    assert mx[0, 100] == pytest.approx(100.0, abs=1e-3)
+    assert my[0, 100] == pytest.approx(100.0, abs=1e-3)
+    assert np.all(np.diff(mx[0]) >= 0)  # the source column is monotone along the row
+    scale, a, b, c = warp.scale, warp.a, warp.b, warp.c
+    # The remap is the inverse: forward(rd) returns the output radius ru it was read from.
+    halfdiag = np.hypot(100.0, 100.0)
+    for col in range(101, 200, 3):
+        ru = (col - 100) / halfdiag
+        rd = (mx[0, col] - 100) / halfdiag
+        assert rd + scale * (a * rd**3 + b * rd**5 + c * rd**7) == pytest.approx(ru, abs=1e-4)
+
+
+def test_panasonic_reader_flows_through_the_shared_render_path(tmp_path):
+    lens = read_lens_metadata(rw2_file(tmp_path / "sample.rw2", _RW2_SAMPLE_WORDS))
+    image = np.random.default_rng(7).uniform(0.1, 0.9, (120, 90, 3)).astype(np.float32)
+    result = apply_lens(image, lens)
+    assert result.shape == image.shape
+    assert result.dtype == np.float32
+    assert not np.array_equal(result, image)  # the warp moved the pixels
+    assert np.abs(result[60, 45] - image[60, 45]).max() == pytest.approx(0.0, abs=1e-6)  # the centre is fixed
 
 
 def test_metadata_cache_tracks_file_revision(tmp_path):

@@ -78,7 +78,7 @@ class HistoryPanel(BaseSidebar):
         session = self.controller.session
         if not self.controller.state.current_file_hash:
             return
-        name, ok = QInputDialog.getText(self, "Save work print", "Name:", text=session.next_work_print_name())
+        name, ok = QInputDialog.getText(self, "Save Work Print", "Name:", text=session.next_work_print_name())
         name = name.strip()
         if not (ok and name):
             return
@@ -113,7 +113,7 @@ class HistoryPanel(BaseSidebar):
         if chosen is export_action:
             self.controller.export_work_print(name)
         elif chosen is rename_action:
-            new_name, ok = QInputDialog.getText(self, "Rename work print", "Name:", text=name)
+            new_name, ok = QInputDialog.getText(self, "Rename Work Print", "Name:", text=name)
             new_name = new_name.strip()
             if not (ok and new_name) or new_name == name:
                 return

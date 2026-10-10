@@ -166,6 +166,7 @@ class GeometrySidebar(BaseSidebar):
             lambda v: self.update_config_section("geometry", render=True, persist=False, readback_metrics=False, fine_rotation=-v)
         )
         self.fine_rot_slider.valueChanged.connect(lambda _v: self.controller.show_rotation_guide())
+        self.fine_rot_slider.valueCommitted.connect(lambda _v: self.controller.reset_all_peeks())
         self.fine_rot_slider.valueCommitted.connect(
             lambda v: self.update_config_section("geometry", render=True, persist=True, readback_metrics=True, fine_rotation=-v)
         )

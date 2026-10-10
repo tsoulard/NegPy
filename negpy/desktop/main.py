@@ -1,13 +1,16 @@
+import html
 import os
+import re
 import sys
 
 from PyQt6.QtCore import QEvent, QObject, Qt, qInstallMessageHandler
 from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QAbstractSpinBox, QApplication, QComboBox, QProxyStyle, QStyle
+from PyQt6.QtWidgets import QAbstractButton, QAbstractSpinBox, QApplication, QComboBox, QProxyStyle, QStyle, QWidget
 
 from negpy.desktop.controller import AppController
 from negpy.desktop.session import DesktopSessionManager
 from negpy.desktop.view.main_window import MainWindow
+from negpy.desktop.view.styles.templates import wrap_tooltip
 from negpy.features.flatfield.logic import set_gain_provider
 from negpy.infrastructure.storage.repository import StorageRepository
 from negpy.services.assets.migrations.cast_removal import migrate_legacy_slide_cast_removal
@@ -57,13 +60,26 @@ def _filter_qt_messages(mode, context, message: str) -> None:
     sys.stderr.write(message + "\n")
 
 
-class WheelScrollsPanel(QObject):
-    """Combo and spin boxes never take the wheel; the ignored event goes on to the panel, which scrolls."""
+class AppEventFilter(QObject):
+    """The app-wide event rules, in one filter so each event crosses into Python once.
+
+    Combo and spin boxes never take the wheel; the ignored event goes on to the panel, which
+    scrolls. Every widget tooltip wraps (plain text never does in Qt), and an icon-only button
+    takes its tooltip's first clause as its accessible name, the one name a screen reader has."""
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        if event.type() == QEvent.Type.Wheel and isinstance(obj, (QComboBox, QAbstractSpinBox)):
+        kind = event.type()
+        if kind == QEvent.Type.Wheel and isinstance(obj, (QComboBox, QAbstractSpinBox)):
             event.ignore()
             return True
+        if kind == QEvent.Type.ToolTipChange and isinstance(obj, QWidget):
+            tip = obj.toolTip()
+            if tip and not tip.startswith("<qt>"):
+                obj.setToolTip(wrap_tooltip(tip))
+            elif tip and isinstance(obj, QAbstractButton) and not obj.text():
+                # The shortcut chips follow the text as a table; the name is the text before them.
+                plain = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", tip.split("<table", 1)[0])).split())
+                obj.setAccessibleName(plain.split(" — ", 1)[0])
         return False
 
 
@@ -299,7 +315,7 @@ def main() -> None:
         app = QApplication(sys.argv)
         app.setApplicationName("NegPy")
         app.setStyle(_AppStyle("Fusion"))
-        app.installEventFilter(WheelScrollsPanel(app))
+        app.installEventFilter(AppEventFilter(app))
 
         icon_path = get_resource_path("media/icons/icon.png")
         if os.path.exists(icon_path):

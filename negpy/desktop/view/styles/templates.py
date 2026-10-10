@@ -2,7 +2,8 @@ import dataclasses
 import html
 
 import qtawesome as qta
-from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtCore import QEvent, QSize, Qt
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QDialogButtonBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QStackedLayout, QWidget
 
 from negpy.desktop.view.styles.fonts import ui_font_family
@@ -158,6 +159,20 @@ def icon_button(icon_name: str, tooltip: str, width: int | None = ICON_BUTTON_WI
     return btn
 
 
+def header_button(icon: QIcon, tooltip: str) -> QPushButton:
+    """A section header's small flat icon button (reset, scope pair, header toggles), also for a
+    help or row icon that sits in a line of text."""
+    btn = QPushButton()
+    btn.setIcon(icon)
+    btn.setFixedSize(HEADER_BUTTON_SIZE, HEADER_BUTTON_SIZE)
+    btn.setIconSize(QSize(HEADER_ICON_SIZE, HEADER_ICON_SIZE))
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setObjectName("collapsible_reset_btn")
+    if tooltip:
+        btn.setToolTip(wrap_tooltip(tooltip))
+    return btn
+
+
 def wrap_tooltip(text: str, footer: str = "") -> str:
     """Plain-text tooltips never word-wrap in Qt; rich text does. Wrap in <qt> so
     long tooltips break into lines instead of spanning the screen. Text that
@@ -167,7 +182,7 @@ def wrap_tooltip(text: str, footer: str = "") -> str:
     `footer` is trusted markup appended inside the <qt> document, so callers adding
     a boilerplate line don't have to re-implement the escape/passthrough rule."""
     if not text.startswith("<qt>"):
-        body = text if ("<" in text and ">" in text) else html.escape(text)
+        body = text if ("<" in text and ">" in text) else html.escape(text).replace("\n", "<br>")
         text = f"<qt>{body}</qt>"
     if footer:
         text = text.removesuffix("</qt>") + footer + "</qt>"

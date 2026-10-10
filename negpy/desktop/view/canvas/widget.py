@@ -794,7 +794,7 @@ class ImageCanvas(QWidget):
         coords = self.overlay.image_coords_at(pos)
         if coords is None:
             return
-        act = menu.addAction("Exclude From Optical Removal")
+        act = menu.addAction("Exclude from Optical Removal")
         act.triggered.connect(lambda _=False, c=coords: self._controller.handle_dust_exclusion_painted([c]))  # type: ignore[union-attr]
 
     def _unload_current_file(self) -> None:

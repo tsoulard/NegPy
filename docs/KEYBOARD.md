@@ -18,6 +18,8 @@ Actions with no default key are not listed; every one of them can still be bound
 |-----|--------|
 | `Left` | Previous file |
 | `Right` | Next file |
+| `Home` | First file |
+| `End` | Last file |
 | `Ctrl + L` | Open the library |
 | `Ctrl + K` | Find a control, card or action |
 | `Ctrl + F` | Focus the film strip search box |

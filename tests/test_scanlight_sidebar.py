@@ -205,7 +205,7 @@ def test_cancelled_scan_returns_sidebar_to_a_terminal_idle_state():
 
     assert not w._scanning
     assert w.status_strip.showing() != "progress"
-    assert "cancelled" in w.status_strip.message().lower()
+    assert "canceled" in w.status_strip.message().lower()
     assert w.lv_btn.isChecked()  # capture cancellation preserves the live-view session
     assert w.controller.set_scanlight_color.called  # restore the framing light
 
@@ -226,7 +226,7 @@ def test_cancelled_calibration_restores_scan_target_and_gates():
     assert w._calibrating_preset == ""
     assert w._lv_target is w.lv_image
     assert w.calib_window.progress.isHidden()
-    assert "cancelled" in w.calib_window.status.text().lower()
+    assert "canceled" in w.calib_window.status.text().lower()
     assert not w._lv_timer.isActive()
     w.controller.stop_live_view.assert_called_once_with()
     assert w.preset_new_btn.isEnabled()
@@ -421,6 +421,62 @@ def test_reset_magnifier_clears_state():
     assert not w._magnifier_on
 
 
+def test_the_body_changing_its_magnifier_restarts_the_focus_peak(tmp_path, monkeypatch):
+    # MF Assist zooms in when the ring turns and the body's timeout zooms back out, with no
+    # click here. Each switch changes the sharpness scale, so the peak restarts and the click
+    # toggle follows the body.
+    import json
+
+    import numpy as np
+
+    import negpy.desktop.view.sidebar.scanlight as sl
+
+    p = tmp_path / "settings.json"
+    monkeypatch.setattr(sl, "default_settings_path", lambda: str(p))
+    w = _sidebar()
+    frame = np.random.default_rng(1).integers(0, 255, (48, 64)).astype(np.uint8)
+
+    def publish(on: bool) -> None:
+        p.write_text(json.dumps({"magnifier": {"on": on}}))
+        w._refresh_camera_settings()
+
+    publish(False)  # the stream's first publish is no change
+    assert w._focus_meter.update(frame) is not None
+    w.lv_window.set_focus(w._focus_meter.update(frame))
+    publish(False)  # unchanged: the peak stands
+    assert w.lv_window.focus_label.text() == "Focus meter: at peak"
+    publish(True)  # the body zoomed in by itself
+    assert w._magnifier_on
+    assert w.lv_window.focus_label.text() == "Focus meter: no reading"
+    assert w._focus_meter.update(frame) is not None
+    publish(False)  # and timed out
+    assert not w._magnifier_on
+    assert w.lv_window.focus_label.text() == "Focus meter: no reading"
+
+
+def test_a_clicks_own_echo_does_not_restart_the_focus_peak(tmp_path, monkeypatch):
+    import json
+
+    import numpy as np
+
+    import negpy.desktop.view.sidebar.scanlight as sl
+
+    p = tmp_path / "settings.json"
+    monkeypatch.setattr(sl, "default_settings_path", lambda: str(p))
+    w = _sidebar()
+    w.lv_btn.blockSignals(True)
+    w.lv_btn.setChecked(True)
+    w.lv_btn.blockSignals(False)
+    frame = np.random.default_rng(1).integers(0, 255, (48, 64)).astype(np.uint8)
+
+    w._on_magnifier_click(0.5, 0.5)
+    w.lv_window.set_focus(w._focus_meter.update(frame))
+    p.write_text(json.dumps({"magnifier": {"on": True}}))  # the body echoes the click
+    w._refresh_camera_settings()
+
+    assert w.lv_window.focus_label.text() == "Focus meter: at peak"
+
+
 def test_camera_settings_populate_and_set(tmp_path, monkeypatch):
     import json
 
@@ -512,7 +568,7 @@ def test_scan_button_reads_scan_then_stop():
 def test_poll_clears_stale_searching_status_on_connect():
     w = _sidebar()  # USB mode
     w._camera_verified = False
-    w._set_status("Camera disconnected.")
+    w._set_status("Camera disconnected")
     w._on_poll_status(_poll(usb_ok=True, usb_model="ZV-E1"))  # USB body appears → connected
     assert w._camera_verified
     assert w.status_strip.message() == ""  # the stale failure line is dropped on connect
@@ -914,7 +970,7 @@ def test_calibration_outcome_survives_the_light_echo(monkeypatch):
     assert "Saved preset" in w.status_strip.message(), "the light echo must not clobber the calibration outcome"
     # The pin is not forever: the next user-driven status (a new flow) replaces it, and the ambient
     # light echo works again afterwards.
-    w._set_status("Calibrating a new preset — see the pop-up.")
+    w._set_status("Calibrating a new preset — see the pop-up")
     w._on_light_set(10, 20, 30, 0)
     assert w.status_strip.message() == "Light: R10 G20 B30"
 

@@ -21,6 +21,7 @@ class AspectRatio(StrEnum):
     R_16_9 = "16:9"
     R_16_10 = "16:10"
     R_8_5_11 = "8.5:11"
+    R_ISO_A = "1:1.4142"
     # Reciprocal (portrait) mirrors of the ratios above. The crop tool's picker omits
     # them (CROP_RATIO_CHOICES) because it auto-orients a ratio to the current drag,
     # so both forms would show the same shape twice. They stay real members because
@@ -35,6 +36,7 @@ class AspectRatio(StrEnum):
     R_9_16 = "9:16"
     R_10_16 = "10:16"
     R_11_8_5 = "11:8.5"
+    R_ISO_A_LANDSCAPE = "1.4142:1"
 
 
 # Ratios offered in the crop tool's picker: one canonical entry per shape (the
@@ -51,6 +53,7 @@ CROP_RATIO_CHOICES: list[AspectRatio] = [
     AspectRatio.R_16_9,
     AspectRatio.R_16_10,
     AspectRatio.R_8_5_11,
+    AspectRatio.R_ISO_A,
 ]
 
 # Maps each portrait AspectRatio to its canonical entry in CROP_RATIO_CHOICES, so a
@@ -65,6 +68,7 @@ _PORTRAIT_TO_CANONICAL_CROP_RATIO: dict[str, str] = {
     AspectRatio.R_9_16: AspectRatio.R_16_9,
     AspectRatio.R_10_16: AspectRatio.R_16_10,
     AspectRatio.R_11_8_5: AspectRatio.R_8_5_11,
+    AspectRatio.R_ISO_A_LANDSCAPE: AspectRatio.R_ISO_A,
 }
 
 

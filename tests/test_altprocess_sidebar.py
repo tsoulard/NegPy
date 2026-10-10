@@ -70,3 +70,14 @@ def test_neither_block_shows_outside_bw() -> None:
     sidebar.sync_ui()
     assert not sidebar.cyano_block.isVisibleTo(sidebar)
     assert not sidebar.mode_btn.isEnabled()
+
+
+def test_a_color_frame_grays_the_panel_and_says_why() -> None:
+    sidebar = _sidebar(Sensitizer.CLASSIC)
+    sidebar.sync_ui()
+    assert sidebar.mode_btn.isEnabled() and not sidebar.color_hint.isVisibleTo(sidebar)
+
+    config = sidebar.state.config
+    sidebar.controller.state.config = replace(config, process=replace(config.process, process_mode=ProcessMode.C41))
+    sidebar.sync_ui()
+    assert not sidebar.mode_btn.isEnabled() and sidebar.color_hint.isVisibleTo(sidebar)

@@ -241,7 +241,7 @@ class LocationPickerDialog(QDialog):
     def _on_coords_edited(self) -> None:
         coords = parse_coords(self.coords_edit.text())
         if coords is None:
-            self.status_label.setText("Coordinates not recognised.")
+            self.status_label.setText("Coordinates not recognized")
             return
         self.coords_edit.setText(format_coords(*coords))
         self.map_view.set_pin(*coords)

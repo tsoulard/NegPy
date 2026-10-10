@@ -170,10 +170,10 @@ def test_context_menu_offers_cancel_while_a_refresh_is_running(browser, session)
 def test_context_menu_offers_unsplit_only_for_a_diptych(browser, session):
     session.state.selected_indices = [0]
     session.state.selected_file_idx = 0
-    assert "Unsplit Diptych" not in _action_labels(browser._build_context_menu())
+    assert "Unsplit Diptych…" not in _action_labels(browser._build_context_menu())
 
     session.state.uploaded_files[0]["diptych"] = True
-    assert "Unsplit Diptych" in _action_labels(browser._build_context_menu())
+    assert "Unsplit Diptych…" in _action_labels(browser._build_context_menu())
 
 
 def test_context_menu_offers_per_frame_split_only_for_a_half(browser, session):

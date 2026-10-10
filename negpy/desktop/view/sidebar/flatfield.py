@@ -91,7 +91,7 @@ class FlatFieldSidebar(BaseSidebar):
 
     def _on_add(self) -> None:
         start = pick_start_dir(last_open_folder(self.controller.session.repo))
-        path, _ = QFileDialog.getOpenFileName(self, "Select flat-field reference", start, _FILE_FILTER)
+        path, _ = QFileDialog.getOpenFileName(self, "Select Flat Field Reference", start, _FILE_FILTER)
         if not path:
             return
         default_name = os.path.splitext(os.path.basename(path))[0]

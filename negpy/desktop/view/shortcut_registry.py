@@ -28,9 +28,12 @@ LIVE_VIEW = "live_view"
 REGISTRY: dict[str, ShortcutEntry] = {
     "prev_file": ShortcutEntry("Left", "Previous file", "Navigation"),
     "next_file": ShortcutEntry("Right", "Next file", "Navigation"),
+    "first_file": ShortcutEntry("Home", "First file", "Navigation"),
+    "last_file": ShortcutEntry("End", "Last file", "Navigation"),
     "toggle_keep": ShortcutEntry("K", "Mark frame as keeper", "Triage"),
     "toggle_scene_overlay": ShortcutEntry("", "Show or hide scene marks on the film strip", "Triage"),
     "toggle_reject": ShortcutEntry("Shift+X", "Reject frame (skipped by batch export)", "Triage"),
+    "toggle_advance_after_mark": ShortcutEntry("", "Advance to the next frame after marking", "Triage"),
     # No default key: nothing obvious is free, and an invented binding that collides makes Qt
     # fire activatedAmbiguously and kills both actions.
     "hdr_merge": ShortcutEntry("", "Merge selected exposures into one HDR frame", "Triage"),
@@ -266,6 +269,7 @@ REGISTRY: dict[str, ShortcutEntry] = {
     "reset_tab": ShortcutEntry("", "Reset this tab to defaults", "Actions"),
     "reset_tab_to_roll": ShortcutEntry("", "Reset this tab to the roll's settings", "Actions"),
     "reset_to_roll": ShortcutEntry("", "Reset this frame to the roll's settings", "Actions"),
+    "undo_roll_push": ShortcutEntry("", "Undo Apply to Roll", "Actions"),
     "load_sidecar": ShortcutEntry("", "Load this frame's edit from a sidecar…", "Actions"),
     "apply_tab": ShortcutEntry("", "Apply this tab to the roll…", "Actions"),
     "toggle_tab_cards": ShortcutEntry("", "Expand or collapse this tab's cards", "Actions"),

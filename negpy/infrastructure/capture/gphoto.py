@@ -341,6 +341,7 @@ class GphotoCamera:
         self._magnifier: Optional[_Magnifier] = None
         self._magnifier_ratios: Optional[tuple[str, str]] = None
         self._magnifier_off = ""
+        self._magnifier_unmagnified: tuple[str, ...] = ()  # choices that show the full frame
         self._magnifier_probed = False
         self._magnifier_engaged = False
         self._magnifier_stalls = False
@@ -612,6 +613,16 @@ class GphotoCamera:
                     "writable": not widget.get_readonly(),
                     "options": options,
                 }
+            # The body's own magnifier state, whoever engaged or released it. Sony packs "ratio,x,y".
+            spec = self._probe_magnifier()
+            if spec is not None:
+                try:
+                    current = _safe_value(self._gp, camera.get_single_config(spec.ratio))
+                except self._gp.GPhoto2Error as exc:
+                    logger.debug("gphoto2: magnifier state unreadable: %s", exc)
+                    current = None
+                if current is not None:
+                    out["magnifier"] = {"on": current.split(",")[0] not in self._magnifier_unmagnified}
             return out
 
     # ----- focus magnifier -------------------------------------------------------
@@ -644,6 +655,7 @@ class GphotoCamera:
                 steps = steps[1:]  # Sony's first step repositions without magnifying
             self._magnifier = spec
             self._magnifier_off = choices[0]
+            self._magnifier_unmagnified = tuple(choices[: len(choices) - len(steps)])
             self._magnifier_ratios = (steps[0], steps[-1])
             logger.info("gphoto2: focus magnifier via %r, steps %s", spec.ratio, self._magnifier_ratios)
             return spec

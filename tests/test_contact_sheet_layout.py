@@ -200,6 +200,11 @@ class TestSettings:
         assert ContactSheetSettings.from_dict(settings.to_dict()).white_paper is True
         assert ContactSheetSettings.from_dict({"white_paper": "yes"}).white_paper is False
 
+    def test_film_base_round_trips_and_defaults_on(self):
+        settings = ContactSheetSettings(film_base=False)
+        assert ContactSheetSettings.from_dict(settings.to_dict()).film_base is False
+        assert ContactSheetSettings.from_dict({"film_base": "no"}).film_base is True
+
     def test_edge_print_defaults_on_for_records_without_it(self):
         assert ContactSheetSettings.from_dict({"dpi": 600}).edge_print is True
 

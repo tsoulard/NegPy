@@ -61,7 +61,7 @@ class TestThumbnailFingerprint:
         config = WorkspaceConfig()
         for section, names in tf._UNHASHED_FIELDS.items():
             assert names <= set(getattr(config, section).__dataclass_fields__), section
-        for section in tf._NON_PIXEL_SECTIONS | tf._BELOW_THUMBNAIL_SECTIONS:
+        for section in tf.NON_PIXEL_SECTIONS | tf._BELOW_THUMBNAIL_SECTIONS:
             assert hasattr(config, section), section
 
     def test_export_only_and_below_thumbnail_settings_do_not_change_it(self) -> None:
@@ -200,7 +200,7 @@ def _current_defaults() -> dict[str, dict[str, str]]:
     return {
         f.name: dict(tf._section_defaults(type(getattr(config, f.name))))
         for f in fields(config)
-        if f.name not in tf._NON_PIXEL_SECTIONS and f.name not in tf._BELOW_THUMBNAIL_SECTIONS
+        if f.name not in tf.NON_PIXEL_SECTIONS and f.name not in tf._BELOW_THUMBNAIL_SECTIONS
     }
 
 

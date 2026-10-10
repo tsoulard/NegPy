@@ -5,6 +5,7 @@ from negpy.desktop.view.widgets.choice_button import ChoiceButton
 from negpy.desktop.view.widgets.sliders import CompactSlider, SliderGroup
 from negpy.desktop.view.sidebar.base import BaseSidebar
 from negpy.desktop.session import ToolMode
+from negpy.desktop.view.styles.color_vision import palette_for
 from negpy.desktop.view.styles.templates import hint_label, section_subheader, wrap_tooltip
 from negpy.desktop.view.styles.theme import THEME
 from negpy.features.local.logic import limited_indices
@@ -166,6 +167,7 @@ class LocalSidebar(BaseSidebar):
             slider.dragStarted.connect(lambda: self.controller.local_drag_changed.emit(True))
             slider.dragEnded.connect(lambda: self.controller.local_drag_changed.emit(False))
         self.tone_btn.currentChanged.connect(lambda i: self.controller.update_selected_local_mask(key=self._tone_keys[i]))
+        self.controller.session.color_vision_changed.connect(self.sync_ui)
 
     def _tool_modes(self) -> dict:
         return {
@@ -187,10 +189,11 @@ class LocalSidebar(BaseSidebar):
         return btn
 
     def _build_mask_row(self, i: int, mask) -> _MaskRow:
+        dodge, burn = palette_for(self.state.color_vision).dodge_burn
         if mask.stops > 0:
-            kind, color = "Burn", THEME.burn
+            kind, color = "Burn", burn
         elif mask.stops < 0:
-            kind, color = "Dodge", THEME.dodge
+            kind, color = "Dodge", dodge
         else:
             # A mask that only changes grade is neither: it re-prints the area at its own contrast
             # without adding or holding back exposure.

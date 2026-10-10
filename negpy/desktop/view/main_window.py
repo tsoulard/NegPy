@@ -11,7 +11,6 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
-    QPushButton,
     QSplitter,
     QStackedWidget,
     QVBoxLayout,
@@ -31,7 +30,7 @@ from negpy.desktop.view.mac_menu_bar import install_mac_menus
 from negpy.desktop.view.shortcut_registry import tooltip_with_shortcut
 from negpy.desktop.view.sidebar.right_panel import RightPanel
 from negpy.desktop.view.sidebar.session_panel import SessionPanel
-from negpy.desktop.view.styles.theme import THEME
+from negpy.desktop.view.styles.templates import hint_label, labeled_action
 from negpy.desktop.view.widgets.command_palette import CommandPalette, FindField
 from negpy.desktop.view.widgets.loading_overlay import LoadingOverlay
 from negpy.desktop.view.widgets.pinnable_dock import PinnableDockWidget
@@ -99,6 +98,7 @@ class _EmptyStateOverlay(QWidget):
 
     add_files_requested = pyqtSignal()
     import_roll_requested = pyqtSignal()
+    scan_requested = pyqtSignal()
     tour_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget) -> None:
@@ -109,25 +109,16 @@ class _EmptyStateOverlay(QWidget):
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.setSpacing(12)
 
-        self.load_btn = QPushButton("Load some scans to get started")
-        self.load_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.load_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {THEME.text_secondary}; "
-            f"border: none; font-size: {THEME.font_size_header}px; padding: 4px 8px; }}"
-            f"QPushButton:hover {{ color: {THEME.text_primary}; text-decoration: underline; }}"
+        self.load_btn = labeled_action(
+            "fa5s.folder-open", "Load Scans…", "Import a folder as a roll, add single files, or scan film", primary=True
         )
         self.load_btn.clicked.connect(self._show_load_menu)
         layout.addWidget(self.load_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+        drop_hint = hint_label("Or drop pictures or a folder onto the window")
+        drop_hint.setWordWrap(False)
+        layout.addWidget(drop_hint, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        self.tour_btn = QPushButton("Take the Tour")
-        self.tour_btn.setFixedWidth(140)
-        self.tour_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.tour_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {THEME.text_hint}; "
-            f"border: 1px solid {THEME.border_primary}; border-radius: 3px; "
-            f"padding: 5px 14px; font-size: {THEME.font_size_small}px; }}"
-            f"QPushButton:hover {{ color: {THEME.text_primary}; }}"
-        )
+        self.tour_btn = labeled_action("", "Take the Tour", "A short guided walk through the panels")
         self.tour_btn.clicked.connect(self.tour_requested)
         layout.addWidget(self.tour_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
 
@@ -135,6 +126,7 @@ class _EmptyStateOverlay(QWidget):
         menu = QMenu(self)
         menu.addAction("Import Folder as a Roll…").triggered.connect(self.import_roll_requested)
         menu.addAction("Add Files…").triggered.connect(self.add_files_requested)
+        menu.addAction("Scan…").triggered.connect(self.scan_requested)
         menu.exec(self.load_btn.mapToGlobal(self.load_btn.rect().bottomLeft()))
 
     def eventFilter(self, obj, event) -> bool:
@@ -291,6 +283,7 @@ class MainWindow(QMainWindow):
         # session_panel is built further down; resolve the browser lazily.
         self.empty_state.add_files_requested.connect(lambda: self.session_panel.file_browser.prompt_add_files())
         self.empty_state.import_roll_requested.connect(lambda: self.session_panel.library_tree.prompt_import_folder())
+        self.empty_state.scan_requested.connect(self._show_scan_tab)
         self.empty_state.raise_()
 
         self.loading_overlay = LoadingOverlay(self.canvas)
@@ -386,6 +379,11 @@ class MainWindow(QMainWindow):
         if getattr(self, "_last_immersive", None) != self.controller.session.state.immersive_canvas:
             self._last_immersive = self.controller.session.state.immersive_canvas
             self.canvas.fit_to_window()
+
+    def _show_scan_tab(self) -> None:
+        if not self.drawer.isVisible():
+            self.toggle_controls_dock()
+        self.right_panel.show_tab_by_key("scan")
 
     def show_tutorial(self) -> None:
         from negpy.desktop.view.widgets.tutorial_steps import build
@@ -510,10 +508,18 @@ class MainWindow(QMainWindow):
     def light_table_active(self) -> bool:
         return self.central_stack.currentIndex() == 1
 
+    def _leave_empty_light_table(self, *_args) -> None:
+        if self.light_table_active() and self.controller.session.asset_model.rowCount() == 0:
+            self.set_light_table(False)
+
     def set_light_table(self, on: bool) -> None:
         """Both side panels hide while the grid shows, so it has the whole window; their saved
         visibility is untouched. Esc, Shift+G or opening a frame leaves it."""
         browser = self.session_panel.file_browser
+        # Both panels hide with it, so an empty grid would have no way back but Esc.
+        if on and self.controller.session.asset_model.rowCount() == 0:
+            on = False
+            self.controller.set_status("No frames match the filter" if self.state.uploaded_files else "No frames loaded", 3000)
         browser.light_table_btn.blockSignals(True)
         browser.light_table_btn.setChecked(on)
         browser.light_table_btn.blockSignals(False)
@@ -600,6 +606,10 @@ class MainWindow(QMainWindow):
         self.controller.export_finished.connect(self._on_export_finished)
         self.controller.session.settings_copied.connect(lambda: self.canvas.hud.showMessage("Settings copied", timeout=1500))
         self.controller.session.settings_pasted.connect(lambda: self.canvas.hud.showMessage("Settings pasted", timeout=1500))
+        self.controller.session.color_vision_changed.connect(self.canvas.overlay.update)
+        model = self.controller.session.asset_model
+        for signal in (model.layoutChanged, model.modelReset, model.rowsRemoved):
+            signal.connect(self._leave_empty_light_table)
         self.controller.session.settings_synced.connect(lambda msg: self.canvas.hud.showMessage(msg, timeout=2500))
         self.controller.tool_sync_requested.connect(self._sync_tool_buttons)
         self.controller.config_updated.connect(self.canvas.overlay.update)
@@ -763,12 +773,18 @@ class MainWindow(QMainWindow):
         self.canvas.hud.set_progress(current, total)
         self.canvas.hud.showMessage(f"Exporting {filename} ({current}/{total})…")
 
-    def _on_export_finished(self, elapsed: float, failed: int) -> None:
+    def _on_export_finished(self, elapsed: float, errors: list) -> None:
         self.canvas.hud.hide_progress()
         msg = f"Export complete in {elapsed:.2f}s"
-        if failed:
-            msg += f" — {failed} failed"
-        self.canvas.hud.showMessage(msg, timeout=6000 if failed else 3000, kind="warning" if failed else "info")
+        if errors:
+            msg += f" — {len(errors)} failed"
+        self.canvas.hud.showMessage(msg, timeout=6000 if errors else 3000, kind="warning" if errors else "info")
+        if errors:
+            # A toast holds one line and the next one replaces it; the box keeps every file.
+            box = QMessageBox(QMessageBox.Icon.Warning, "Export", f"{count_of(len(errors), 'file')} could not be exported.", parent=self)
+            box.setDetailedText("\n".join(errors))
+            box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            box.open()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

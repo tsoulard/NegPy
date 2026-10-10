@@ -406,7 +406,7 @@ class ExportSettingsForm(QWidget):
         self._on_changed()
 
     def _import_icc(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Import ICC profile", "", "ICC profiles (*.icc *.icm)")
+        path, _ = QFileDialog.getOpenFileName(self, "Import ICC Profile", "", "ICC profiles (*.icc *.icm)")
         if not path:
             return
         # ColorSpaceRegistry prefers a user file named after a space, so such an import
@@ -424,7 +424,7 @@ class ExportSettingsForm(QWidget):
         try:
             stored = import_icc_profile(path, APP_CONFIG.user_icc_dir)
         except (ValueError, OSError) as e:
-            QMessageBox.warning(self, "Import Failed", str(e))
+            QMessageBox.warning(self, "Import ICC Profile", str(e))
             return
         self._reload_icc_profiles(select=stored)
         self._on_export_profile_changed()

@@ -25,6 +25,7 @@ def ctrl(tmp_path):
     c.request_render = MagicMock()
     c.tool_sync_requested = MagicMock()
     c.loading_started = MagicMock()
+    c._peek_sections = None
     return c
 
 

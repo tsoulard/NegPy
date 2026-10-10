@@ -191,7 +191,7 @@ class ExportSidebar(BaseSidebar):
             "fa5s.eye",
             "Preview",
             "Show the marked-up work print over the frame: burns hatched, dodges open, each mask "
-            "labelled with its value in stops, plus a card with the print recipe. Display only.",
+            "labeled with its value in stops, plus a card with the print recipe. Display only.",
         )
         self.printing_notes_preview_btn.setChecked(self.state.printing_notes)
         self.printing_notes_preview_btn.setFixedHeight(default_button_height())
@@ -905,7 +905,7 @@ class ExportSidebar(BaseSidebar):
         self._refresh_proof_mismatch_warning()
 
     def _on_save_proof_condition(self) -> None:
-        name, ok = QInputDialog.getText(self, "Save proof preset", "Name (printer and paper):")
+        name, ok = QInputDialog.getText(self, "Save Proof Preset", "Name (printer and paper):")
         name = name.strip()
         if not (ok and name):
             return

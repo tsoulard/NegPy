@@ -315,3 +315,24 @@ def test_a_shortcut_puts_down_an_armed_tool_on_a_grayed_page(qapp):
 
     assert not button.isChecked()
     window.controller.set_status.assert_not_called()
+
+
+def _row_color(sidebar: LocalSidebar, index: int = 0) -> str:
+    row = sidebar.mask_list.itemWidget(sidebar.mask_list.item(index))
+    return row.layout().itemAt(1).widget().styleSheet()
+
+
+def test_mask_rows_take_the_color_vision_dodge_and_burn_colors(qapp):
+    from negpy.desktop.view.styles.color_vision import palette_for
+
+    controller, sidebar = _sidebar(LocalMask(vertices=SQUARE, stops=-0.5), LocalMask(vertices=SQUARE, stops=1.0))
+    controller.state.color_vision = "tritan"
+    sidebar.sync_ui()
+
+    dodge, burn = palette_for("tritan").dodge_burn
+    assert dodge in _row_color(sidebar, 0) and burn in _row_color(sidebar, 1)
+
+
+def test_a_color_vision_change_rebuilds_the_rows(qapp):
+    controller, _sidebar_ = _sidebar()
+    controller.session.color_vision_changed.connect.assert_called_with(_sidebar_.sync_ui)

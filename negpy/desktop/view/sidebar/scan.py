@@ -541,7 +541,7 @@ class ScanSidebar(QWidget):
             self.debug_log_btn.blockSignals(True)
             self.debug_log_btn.setCurrentIndex(0)
             self.debug_log_btn.blockSignals(False)
-            self.status_strip.set_message("nkscan is not installed, so there is no debug log to write.")
+            self.status_strip.set_message("nkscan is not installed, so there is no debug log to write")
         if level != self._settings.nkscan_log_level:
             self.settings = replace(self._settings, nkscan_log_level=level)
 
@@ -1330,7 +1330,7 @@ class ScanSidebar(QWidget):
 
             require_sequence_varying_scan_filename(pattern, "20000101")
         except ValueError:
-            self.status_strip.set_message("Filename pattern must include the sequence number ({{ seq }}).")
+            self.status_strip.set_message("Filename pattern must include the sequence number ({{ seq }})")
             return
 
         if self._frame_spec() is None:
@@ -1437,7 +1437,7 @@ class ScanSidebar(QWidget):
         self.status_strip.set_message(f"Error: {text}")
         # Unsupported pyOpticfilm models: status alone is easy to miss.
         if "cannot scan with pyOpticfilm" in text:
-            QMessageBox.warning(self, "Scan Failed", text)
+            QMessageBox.warning(self, "Scan", text)
 
     @pyqtSlot(bool)
     def _on_ejected(self, triggered: bool) -> None:

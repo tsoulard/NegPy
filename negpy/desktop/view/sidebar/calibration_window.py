@@ -118,7 +118,7 @@ class CalibrationWindow(QDialog):
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
 
-        self.status = hint_label("Click the clear film base (crosshair), name the stock, then Calibrate & Save.")
+        self.status = hint_label("Click the clear film base (crosshair), name the stock, then Calibrate & Save")
         layout.addWidget(self.status)
 
         self._running = False
@@ -169,7 +169,7 @@ class CalibrationWindow(QDialog):
         self.image.clear_frame()
         self.image.set_loading(True)
         self.progress.setVisible(False)
-        self.set_status("Click the clear film base (crosshair), name the stock, then Calibrate & Save.")
+        self.set_status("Click the clear film base (crosshair), name the stock, then Calibrate & Save")
         self.show()
         self.raise_()
 

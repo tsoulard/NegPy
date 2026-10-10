@@ -364,3 +364,13 @@ def test_a_drag_measures_from_where_the_sheet_was_when_it_began(dialog):
     canvas.mouseMoveEvent(_mouse(QEvent.Type.MouseMove, QPointF(rect.center().x(), rect.bottom() + 5 * scale)))
     canvas.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, QPointF(rect.center().x(), rect.bottom()), Qt.MouseButton.NoButton))
     assert d.settings().paper_height == pytest.approx(DEFAULT_PAPER.height + 10, abs=1.0)
+
+
+def test_film_base_follows_white_paper_and_reaches_the_look_and_the_settings(dialog):
+    d = dialog()
+    assert not d.film_base_btn.isEnabled()  # nothing to print white until the paper is
+    d.white_btn.setChecked(True)
+    assert d.film_base_btn.isEnabled() and d.look().film_base
+    d.film_base_btn.setChecked(False)
+    assert not d.look().film_base
+    assert d.settings().film_base is False

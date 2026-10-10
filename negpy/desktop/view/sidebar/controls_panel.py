@@ -1,11 +1,12 @@
 from PyQt6.QtWidgets import (
+    QMenu,
     QWidget,
     QVBoxLayout,
 )
-from PyQt6.QtCore import QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 
 from negpy.desktop.controller import AppController
-from negpy.desktop.view.shortcut_registry import tooltip_with_shortcut
+from negpy.desktop.view.shortcut_registry import label_with_shortcut, tooltip_with_shortcut
 from negpy.desktop.view.styles.templates import header_row, hint_label, section_subheader, set_hint_kind, wrap_tooltip
 from negpy.desktop.view.widgets.collapsible import NO_ROLL_SCOPE_HINT, CollapsibleSection, make_section
 from negpy.desktop.view.widgets.charts import MiniHistogramWidget, MiniRGBHistogramWidget
@@ -243,11 +244,13 @@ class ControlsPanel(QWidget):
         metering_layout.setSpacing(4)
         metering_layout.addWidget(self.process_sidebar)
         metering_layout.addWidget(self.process_sidebar.analysis_bar)
+        self.metering_histogram = MiniHistogramWidget(clip_strips=False)  # the Clipping line below is the card's one clip readout
         self.process_section = self._make_section(
             "Metering",
             "process",
             metering_body,
             icon_name="fa5s.tachometer-alt",
+            background_widget=self.metering_histogram,
         )
 
         self.sensor_sidebar = SensorSidebar(self.controller)
@@ -478,6 +481,23 @@ class ControlsPanel(QWidget):
         for key, section in self._roll_sections() + self._frame_sections():
             section.scope_selected.connect(lambda scope, k=key: self._on_scope_selected(k, scope))
             section.roll_revert_requested.connect(lambda k=key: self.controller.revert_to_roll(_SECTION_CARDS.get(k, (k,))))
+        for key, section in self._roll_sections() + self._frame_sections():
+            section.toggle_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            section.toggle_button.customContextMenuRequested.connect(lambda pos, k=key, s=section: self._show_card_menu(k, s, pos))
+
+    def _show_card_menu(self, key: str, section: CollapsibleSection, pos) -> None:
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        if key in dict(self._roll_sections()):
+            undo = menu.addAction(label_with_shortcut("Undo Apply to Roll", "undo_roll_push"))
+            undo.setToolTip("Give the roll back the values it had before the last Roll push from this frame")
+            undo.setEnabled(self.controller.can_undo_roll_push(_SECTION_CARDS.get(key, (key,))))
+            undo.triggered.connect(self.controller.undo_roll_push)
+        else:
+            copy = menu.addAction("Copy Card Settings")
+            copy.setToolTip("Copy this card alone; Paste then offers only its settings")
+            copy.triggered.connect(lambda: self.controller.session.copy_card_settings(frame_card_rows(key)))
+        menu.exec(section.toggle_button.mapToGlobal(pos))
 
     def apply_shortcut_tooltips(self) -> None:
         """Single source for every shortcut-bearing widget tooltip — re-run on each
@@ -1045,6 +1065,7 @@ class ControlsPanel(QWidget):
         self._last_histogram_buf = buf
         self.tone_histogram.update_data(buf)
         self.color_histogram.update_data(buf)
+        self.metering_histogram.update_data(buf)
 
     def _reset_sensor_fields(self) -> None:
         self._reset_process_fields(_SENSOR_FIELDS)

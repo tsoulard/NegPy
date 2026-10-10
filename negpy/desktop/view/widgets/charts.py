@@ -946,10 +946,11 @@ class MiniHistogramWidget(QWidget):
     Draws only the L channel at ~40% opacity (always linear scale).
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, clip_strips: bool = True):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._data_l: list = []
+        self._clip_strips = clip_strips
         self._clip_low: bool = False
         self._clip_high: bool = False
 
@@ -997,6 +998,8 @@ class MiniHistogramWidget(QWidget):
 
         # Clipping indicators: 3px vertical strip, full height
         painter.setPen(Qt.PenStyle.NoPen)
+        if not self._clip_strips:
+            return
         if self._clip_low:
             shadow_color = QColor(80, 140, 220, 180)
             painter.setBrush(QBrush(shadow_color))

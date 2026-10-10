@@ -53,6 +53,15 @@ class TestDesktopSessionSync(unittest.TestCase):
         # A scoped apply reads the visible set, which a real load always builds.
         self.session.asset_model.refresh()
 
+    def test_a_color_vision_choice_is_saved_and_announced(self):
+        heard = []
+        self.session.color_vision_changed.connect(lambda: heard.append(1))
+        self.session.set_color_vision("tritan")
+        self.session.set_color_vision("tritan")
+        self.assertEqual(self.session.state.color_vision, "tritan")
+        self.mock_repo.save_global_setting.assert_called_once_with("color_vision", "tritan")
+        self.assertEqual(heard, [1])
+
     def test_update_selection(self):
         self.session.update_selection([0, 1])
         self.assertEqual(self.session.state.selected_indices, [0, 1])
@@ -969,6 +978,27 @@ class TestDesktopSessionSync(unittest.TestCase):
         self.assertEqual(self.session.state.config.lab.saturation, 1.9)  # not selected → kept
         self.assertTrue(rendered)
 
+    def test_a_paste_reaches_every_selected_frame(self):
+        self.session.state.selected_file_idx = 0
+        self.session.state.current_file_hash = "hash1"
+        self.session.state.clipboard = replace(WorkspaceConfig(), exposure=replace(WorkspaceConfig().exposure, density=2.2))
+        self.mock_repo.load_file_settings.return_value = WorkspaceConfig()
+        self.session.update_selection([0, 1])
+
+        self.session.apply_pasted_fields([_row("Print Density")])
+
+        self.assertEqual(self.session.state.config.exposure.density, 2.2)
+        saved = {c.args[0]: c.args[1] for c in self.mock_repo.save_file_settings.call_args_list}
+        self.assertEqual(saved["hash2"].exposure.density, 2.2)
+
+    def test_a_card_copy_holds_its_rows_and_a_whole_copy_clears_them(self):
+        self.session.state.current_file_hash = "hash1"
+        rows = [_row("Print Density")]
+        self.session.copy_card_settings(rows)
+        self.assertEqual(self.session.state.clipboard_rows, rows)
+        self.session.copy_settings()
+        self.assertIsNone(self.session.state.clipboard_rows)
+
     def test_apply_pasted_fields_noop_when_clipboard_empty(self):
         self.session.state.current_file_hash = "hash1"
         self.session.state.clipboard = None
@@ -1860,6 +1890,59 @@ class TestTriageMarks(unittest.TestCase):
         self.session.state.uploaded_files[1]["excluded"] = True
         self.session.asset_model.set_sheet_filter("all")
         self.assertEqual(self.session.asset_model.visible_actual_indices(), {0, 1, 2})
+
+    def test_sheet_filter_unmarked_hides_both_marks(self):
+        self.session.state.uploaded_files[0]["keeper"] = True
+        self.session.state.uploaded_files[1]["excluded"] = True
+        self.session.asset_model.set_sheet_filter("unmarked")
+        self.assertEqual(self.session.asset_model.visible_actual_indices(), {2})
+
+    def _advance(self, on):
+        self.mock_repo.get_global_setting.side_effect = lambda key, default=None: on if key == "advance_after_mark" else default
+        self.session.select_file = MagicMock()
+
+    def test_marking_advances_to_the_next_frame_when_asked(self):
+        self._advance(True)
+        self.session.toggle_mark("keeper")
+        self.session.select_file.assert_called_once_with(1)
+
+    def test_marking_stays_put_by_default(self):
+        self._advance(False)
+        self.session.toggle_mark("keeper")
+        self.session.select_file.assert_not_called()
+
+    def test_advance_finds_the_next_frame_after_the_mark_hides_this_one(self):
+        self._advance(True)
+        self.session.asset_model.set_sheet_filter("unmarked")
+        self.session.toggle_mark("excluded")
+        self.session.select_file.assert_called_once_with(1)
+
+    def test_clearing_a_mark_or_marking_a_block_does_not_advance(self):
+        self._advance(True)
+        self.session.state.uploaded_files[0]["keeper"] = True
+        self.session.toggle_mark("keeper")
+        self.session.state.selected_indices = [0, 1]
+        self.session.toggle_mark("keeper")
+        self.session.select_file.assert_not_called()
+
+    def test_advance_counts_from_the_marked_frame_not_the_active_one(self):
+        self._advance(True)
+        self.session.state.selected_indices = [1]  # active frame 0 deselected, frame 1 still selected
+        self.session.toggle_mark("keeper")
+        self.assertTrue(self.session.state.uploaded_files[1]["keeper"])
+        self.session.select_file.assert_called_once_with(2)
+
+    def test_home_on_the_first_frame_reloads_nothing(self):
+        self.session.select_file = MagicMock()
+        self.session.first_file()
+        self.session.select_file.assert_not_called()
+
+    def test_home_and_end_reach_the_first_and_last_visible_frame(self):
+        self.session.state.selected_file_idx = 1
+        self.session.select_file = MagicMock()
+        self.session.first_file()
+        self.session.last_file()
+        self.assertEqual([c.args[0] for c in self.session.select_file.call_args_list], [0, 2])
 
     def test_add_files_restores_marks_from_repo(self):
         self.mock_repo.load_file_marks.return_value = {"hash9": "keeper", "hash2": "excluded"}

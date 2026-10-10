@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QVBoxLayout, QWidget
 
 from negpy.desktop.view.widgets.choice_button import ChoiceButton
 from negpy.desktop.view.sidebar.base import BaseSidebar
-from negpy.desktop.view.styles.templates import field_label
+from negpy.desktop.view.styles.templates import field_label, hint_label
 from negpy.desktop.view.widgets.sliders import CompactSlider, SliderGroup
 from negpy.features.altprocess.models import AltProcess, Sensitizer
 from negpy.features.process.models import ProcessMode
@@ -51,6 +51,8 @@ class AltProcessSidebar(BaseSidebar):
         for action, (*_rest, tip) in zip(self.mode_btn.choice_menu.actions(), self._modes):
             action.setToolTip(tip)
         self.layout.addWidget(self.mode_btn)
+        self.color_hint = hint_label("Black and white film only")
+        self.layout.addWidget(self.color_hint)
 
         self.lith_block = self._build_lith(conf)
         self.cyano_block = self._build_cyanotype(conf)
@@ -173,6 +175,7 @@ class AltProcessSidebar(BaseSidebar):
         try:
             self.mode_btn.setCurrentIndex(next(i for i, (m, *_rest) in enumerate(self._modes) if m == conf.alt_process))
             self.mode_btn.setEnabled(is_bw)
+            self.color_hint.setVisible(not is_bw)
 
             self.exposure_slider.setValue(conf.lith_exposure)
             self.snatch_slider.setValue(conf.lith_snatch)
